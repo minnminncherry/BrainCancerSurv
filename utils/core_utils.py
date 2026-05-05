@@ -211,7 +211,7 @@ def save_training_history_csv(args, history, cur=0, output_dir=None):
     Save epoch-wise history and per-fold best metrics to CSV.
     """
     if output_dir is None:
-        output_dir = os.path.join(os.getcwd(), "result")
+        output_dir = os.path.join(os.getcwd(), "../result")
     os.makedirs(output_dir, exist_ok=True)
 
     df = pd.DataFrame(

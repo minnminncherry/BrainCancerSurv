@@ -98,7 +98,7 @@ class SurvivalGenomicDataset:
         test_split, _ = self._get_split_from_df(args, split_key="test",fold_indices=fold_indices, scalar=False)
 
         # Save merged split data under project `result/` folder.
-        result_dir = os.path.join(os.getcwd(), "result")
+        result_dir = os.path.join(os.getcwd(), "../result")
         os.makedirs(result_dir, exist_ok=True)
         train_split["df"].to_csv(os.path.join(result_dir, "train_merged_split.csv"), index=False)
         test_split["df"].to_csv(os.path.join(result_dir, "test_merged_split.csv"), index=False)
@@ -173,7 +173,7 @@ class SurvivalGenomicDataset:
                 f"No rows matched between label '{label_id_col}' and genomic '{genomic_id_col}'."
             )
         # save the merged dataframe to a csv file in the result folder
-        result_dir = os.path.join(os.getcwd(), "result")
+        result_dir = os.path.join(os.getcwd(), "../result")
         os.makedirs(result_dir, exist_ok=True)
         pd.DataFrame(merged).to_csv(os.path.join(result_dir, "merge_df.csv"), index=False)
 
