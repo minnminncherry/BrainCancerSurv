@@ -119,13 +119,13 @@ def hallmark_pathway_row_to_column_matrix(
 
 
 if __name__ == "__main__":
-    import argparse
+    import yaml
+    import os
 
-    parser = argparse.ArgumentParser(
-        description="Convert hallmark pathway definitions into a gene x pathway 0/1 matrix CSV."
-    )
-    parser.add_argument("input_path", help="Input pathway file (row-based).")
-    parser.add_argument("output_path", help="Output CSV (column-based 0/1 matrix).")
-    args = parser.parse_args()
+    yaml_file_path = os.path.join(os.getcwd(), "../config.yaml")
+    with open(yaml_file_path, 'r') as file:
+        data = yaml.safe_load(file)
+    default_input = data['pathway_src_file_path']['hallmark_pathway']
+    default_output = data['pathway_clean_file_path']['hallmark_pathway_matrix_output_file']
 
-    hallmark_pathway_row_to_column_matrix(args.input_path, output_path=args.output_path)
+    hallmark_pathway_row_to_column_matrix(default_input, output_path=default_output)
