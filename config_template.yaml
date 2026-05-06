@@ -1,0 +1,16 @@
+database:
+  user: 
+  pass: 
+  database_name: 
+mysql_file_paths: 
+gbm_src_file_paths:
+  clinical_data: 
+  wsi_images: 
+  genomic_data: 
+gbm_clean_file_paths: 
+  genomic_data: 
+pathway_file_path:
+  hallmark_pathway: 
+  reactome_pathway: 
+model_save_path: 
+
