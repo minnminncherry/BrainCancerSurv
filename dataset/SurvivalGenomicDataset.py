@@ -102,6 +102,9 @@ class SurvivalGenomicDataset:
         os.makedirs(result_dir, exist_ok=True)
         train_split["df"].to_csv(os.path.join(result_dir, "train_merged_split.csv"), index=False)
         test_split["df"].to_csv(os.path.join(result_dir, "test_merged_split.csv"), index=False)
+        print('Done!')
+        print("Training on {} samples".format(len(train_split["df"])))
+        print("Testing on {} samples".format(len(test_split["df"])))
         return train_split, test_split, scalar
 
     # Public API (main.py calls this name).
