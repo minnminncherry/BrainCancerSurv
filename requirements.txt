@@ -57,6 +57,7 @@ nvidia-nvtx-cu12==12.1.105
 packaging==24.0
 pandas==2.3.3
 pillow==12.1.1
+pydicom==3.0.1
 Pygments==2.20.0
 python-dateutil==2.9.0.post0
 pytz==2026.2
