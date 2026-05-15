@@ -2,6 +2,32 @@ import os
 import pandas as pd
 import numpy as np
 import torch
+from torch.utils.data import Dataset
+
+
+class SurvivalGenomicSplitDataset(Dataset):
+    def __init__(self, x, y, df):
+        self.x = np.asarray(x, dtype=np.float32)
+        self.y = np.asarray(y, dtype=np.int64)
+        self.df = df.reset_index(drop=True).copy()
+
+    def __len__(self):
+        return len(self.y)
+
+    def __getitem__(self, idx):
+        idx = int(idx)
+        row = self.df.iloc[idx]
+        omics_tensor = torch.from_numpy(self.x[idx])
+        label = int(self.y[idx])
+        event_time = float(pd.to_numeric(row.get("CDE_survival_time", row.get("survival_months", 0.0)), errors="coerce"))
+
+        c_col = next(
+            (c_name for c_name in SurvivalGenomicDataset.CENSOR_CANDIDATES if c_name in self.df.columns),
+            None,
+        )
+        c = float(row[c_col]) if c_col is not None else 0.0
+        clinical_data = row.to_dict()
+        return (torch.zeros((1, 1), dtype=torch.float32), omics_tensor, label, event_time, c, clinical_data)
 
 class SurvivalGenomicDataset:
     ID_CANDIDATES = ("patient_id", "_PATIENT", "sampleID", "bcr_patient_barcode")
@@ -100,8 +126,11 @@ class SurvivalGenomicDataset:
         # Save merged split data under project `result/` folder.
         result_dir = os.path.join(os.getcwd(), "../result")
         os.makedirs(result_dir, exist_ok=True)
-        train_split["df"].to_csv(os.path.join(result_dir, "train_merged_split.csv"), index=False)
-        test_split["df"].to_csv(os.path.join(result_dir, "test_merged_split.csv"), index=False)
+        train_split.df.to_csv(os.path.join(result_dir, "train_merged_split.csv"), index=False)
+        test_split.df.to_csv(os.path.join(result_dir, "test_merged_split.csv"), index=False)
+        print('Done!')
+        print("Training on {} samples".format(len(train_split)))
+        print("Testing on {} samples".format(len(test_split)))
         return train_split, test_split, scalar
 
     # Public API (main.py calls this name).
@@ -209,7 +238,7 @@ class SurvivalGenomicDataset:
                 raise ValueError("Feature columns do not match fitted scaler feature columns.")
             x = (x - scaler_to_use["mean"].astype(np.float32)) / scaler_to_use["std"].astype(np.float32)
 
-        return {"x": x, "y": y, "df": split_df}, fitted_scaler
+        return SurvivalGenomicSplitDataset(x=x, y=y, df=split_df), fitted_scaler
     
     def data_return_item(self, idx):
         idx = int(idx)
@@ -244,3 +273,6 @@ class SurvivalGenomicDataset:
 
     def __getitem__(self, idx):
         return self.data_return_item(idx)
+
+    def __len__(self):
+        return len(self.metadata)
