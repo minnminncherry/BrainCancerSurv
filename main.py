@@ -24,6 +24,8 @@ def main(args):
         fold_metrics.append(
             {
                 "fold": i,
+                "train_acc": total_acc,
+                "train_loss": total_loss,
                 "final_val_acc": val_acc,
                 "final_val_loss": val_loss,
                 "best_model_path": best_model_path,
@@ -33,7 +35,7 @@ def main(args):
         # print("test_split: ", test_split)
         # print("scalar: ", scalar)
 
-    save_final_fold_summary(fold_metrics)
+    save_final_fold_summary(fold_metrics, args.modality, args.genomic_file_name)
     if fold_metrics:
         avg_val_acc = float(np.mean([metric["final_val_acc"] for metric in fold_metrics]))
         avg_val_loss = float(np.mean([metric["final_val_loss"] for metric in fold_metrics]))
@@ -61,4 +63,8 @@ if __name__ == "__main__":
         num_workers=args.num_workers,
     )
     args.data_factory = data_factory
+    # print(args.data_factory.genomic_feature_cols)
+    # print(len(args.data_factory.genomic_feature_cols))
+    # print(f"Data factory initialized with {len(args.data_factory.metadata)} samples and {len(args.data_factory.genomic_feature_cols)} genomic features.")
+
     model_paths = main(args)

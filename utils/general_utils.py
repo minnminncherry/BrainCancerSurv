@@ -31,14 +31,16 @@ def _get_split_loader(args, split_dataset, training=False, testing=False, weight
     Returns:
         - loader : Pytorch Dataloader
     """
-    kwargs = {"num_workers": 8} if torch.cuda.is_available() else {}
+    kwargs = {"num_workers": args.num_workers} if torch.cuda.is_available() else {}
+    
+    # if isinstance(split_dataset, dict):
+    #     print(f"split dataset X: {split_dataset['x'].shape}, y: {split_dataset['y'].shape }")
+    #     x_tensor = torch.tensor(split_dataset["x"], dtype=torch.float32)
+    #     y_tensor = torch.tensor(split_dataset["y"], dtype=torch.long)
+    #     split_dataset = TensorDataset(x_tensor, y_tensor)
+    #     collate_fn = None
 
-    if isinstance(split_dataset, dict):
-        x_tensor = torch.tensor(split_dataset["x"], dtype=torch.float32)
-        y_tensor = torch.tensor(split_dataset["y"], dtype=torch.long)
-        split_dataset = TensorDataset(x_tensor, y_tensor)
-        collate_fn = None
-    elif args.modality in ["mlp", "kmeans"]:
+    if args.modality in ["mlp", "kmeans"]:
         collate_fn = _collate_genomic
     else:
         raise NotImplementedError(f"Modality {args.modality} not implemented")

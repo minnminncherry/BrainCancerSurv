@@ -48,22 +48,33 @@ def main(args1, args2, args3):
     elif(args1 == 'GENERATE_CLEAN_GENOMIC_DATA'):
         destination_path = data['gbm_clean_file_paths']['genomic_data_dir']
         if gen_cls.conn:
-            gen_cls.generate_clean_genomic_data(output_genomic_dir)
+            if args2 == 'gbm' and args3 == 'tpm':
+                gen_cls.generate_clean_genomic_data(output_genomic_dir, unstranded_column='tpm_unstranded')
+            elif args2 == 'lgg' and args3 == 'tpm':
+                gen_cls.generate_clean_genomic_data(output_genomic_dir, unstranded_column='tpm_unstranded')
+            elif args2 == 'gbm' and args3 == 'fpkm':
+                gen_cls.generate_clean_genomic_data(output_genomic_dir, unstranded_column='fpkm_uq_unstranded')
+            elif args2 == 'lgg' and args3 == 'fpkm':
+                gen_cls.generate_clean_genomic_data(output_genomic_dir, unstranded_column='fpkm_uq_unstranded')
             print(f"Copying cleaned genomic data from {output_genomic_dir} to {destination_path}")
-            shutil.copy(output_genomic_dir+f"cleaned_genomic_data_{date}.csv", destination_path+f"/raw_{args2}.csv")
+            shutil.copy(output_genomic_dir+f"cleaned_genomic_data_{date}.csv", destination_path+f"/cleaned_genomic_data_{date}.csv")
         else:
             print("Failed to connect to database")
 
     elif(args1 == 'GENERATE_TRANSFORMED_GENOMIC_DATA'):
         hallmarks_data_path = os.path.join(data['pathway_clean_file_path']['hallmark_pathway_matrix_output_file'])
-        if args2 == 'gbm' and gen_cls.conn:
-            gen_cls.transform_genomic_data(output_genomic_dir+f"cleaned_genomic_data_{date}.csv", hallmarks_data_path, final_genomic_data_file_name, fill_type='mean', cancer_type='gbm')
-        elif args2 == 'lgg' and gen_cls.conn:
-             gen_cls.transform_genomic_data(output_genomic_dir+f"cleaned_genomic_data_{date}.csv", hallmarks_data_path, final_genomic_data_file_name, fill_type='mean', cancer_type='lgg')
+        if args2 == 'gbm' and args3 == 'tpm' and gen_cls.conn:
+            gen_cls.transform_genomic_data(output_genomic_dir+f"cleaned_genomic_data_{date}.csv", hallmarks_data_path, final_genomic_data_file_name, unstranded_column='tpm_unstranded', fill_type='mean', cancer_type='gbm')
+        elif args2 == 'lgg' and args3 == 'tpm' and gen_cls.conn:
+             gen_cls.transform_genomic_data(output_genomic_dir+f"cleaned_genomic_data_{date}.csv", hallmarks_data_path, final_genomic_data_file_name, unstranded_column='tpm_unstranded', fill_type='mean', cancer_type='lgg')
+        elif args2 == 'gbm' and args3 == 'fpkm' and gen_cls.conn:
+            gen_cls.transform_genomic_data(output_genomic_dir+f"cleaned_genomic_data_{date}.csv", hallmarks_data_path, final_genomic_data_file_name, unstranded_column='fpkm_uq_unstranded', fill_type='mean', cancer_type='gbm')
+        elif args2 == 'lgg' and args3 == 'fpkm' and gen_cls.conn:
+             gen_cls.transform_genomic_data(output_genomic_dir+f"cleaned_genomic_data_{date}.csv", hallmarks_data_path, final_genomic_data_file_name, unstranded_column='fpkm_uq_unstranded', fill_type='mean', cancer_type='lgg')
 
     elif(args1 == 'NORMALIZE_GENOMIC_DATA'):
 
-        normal_cls = DataNormalization_genomic_data(os.path.join(final_genomic_data_file_name, args2)+".csv", target_column='case_id', cancer_type=args2)
+        normal_cls = DataNormalization_genomic_data(os.path.join(final_genomic_data_file_name, args2+"_filtered")+".csv", target_column='case_id', cancer_type=args2)
         # df_pivot_genomic_data: pd.DataFrame,method: str = "zscore", eps: float = 1e-8, output_path: str = "./"
         if args2 == 'gbm' and args3 in ['zscore']:
             normal_cls.normalize_genomic_data(method=args3, output_path=final_genomic_data_file_name)

@@ -116,6 +116,22 @@ class SurvivalGenomicDataset:
                 "This usually means there are too few unique values for the requested n_classes."
             )
         return bins.astype("int64").values
+
+    # def __discretize_bin_suvival_month(self, survival_months):
+    #     n_quantiles = max(2, int(self.n_classes))
+    #     # qcut function = Split data so each group has the SAME number of samples
+    #     # Bin 0: [10, 20]     -> 10-20 months
+    #     # Bin 1: [30, 40]    -> 30-40 months
+    #     # Bin 2: [50, 60]    -> 50-60 months        
+    #     # Bin 3: [70, 80]    -> 70-80 months
+    #     bins = pd.qcut(survival_months, q=n_quantiles, labels=False, duplicates="drop")
+    #     if getattr(bins, "isna", None) is not None and bins.isna().any():
+    #         bad_count = int(bins.isna().sum())
+    #         raise ValueError(
+    #             f"Discretization produced {bad_count} NaN bin(s). "
+    #             "This usually means there are too few unique values for the requested n_classes."
+    #         )
+    #     return bins.astype("int64").values
     
     def __return_splits(self, args, fold_indices):
         # This function can be implemented to return the appropriate splits of the dataset based on the provided indices.
@@ -272,6 +288,7 @@ class SurvivalGenomicDataset:
         return (torch.zeros((1, 1), dtype=torch.float32), omics_tensor, label, event_time, c, clinical_data)
 
     def __getitem__(self, idx):
+        print(f"Fetching item at index: {idx}")
         return self.data_return_item(idx)
 
     def __len__(self):

@@ -128,15 +128,14 @@ class GenomicDataCleaner:
             print(f"Error inserting TSV data into database: {e}")
             self.conn.rollback()
         
-    def generate_clean_genomic_data(self, out_file_path):
+    def generate_clean_genomic_data(self, out_file_path, unstranded_column='tpm_unstranded'):
         """Generate cleaned genomic data and save to output directory"""
         # This function can be implemented to read from the database, perform any necessary cleaning or transformation, and save the cleaned data to the output directory.
         date = pd.Timestamp.now().strftime("%Y-%m-%d")
-        sql = '''
-                SELECT 
+        sql = ''' SELECT 
             a.gene_name, 
             SUBSTRING_INDEX(c.entity_submitter_id, '-', 3) AS patient_id, 
-            SUM(a.fpkm_uq_unstranded) AS fpkm_value 
+            SUM(a.%s) AS %s 
         FROM raw_genomic_data a 
         INNER JOIN raw_file_name_genomic_data b 
             ON a.file_name = b.file_name 
@@ -146,17 +145,19 @@ class GenomicDataCleaner:
             a.gene_id IS NOT NULL
             AND a.gene_name IS NOT NULL
             AND a.gene_name != ''
-            AND a.gene_id NOT LIKE '%PAR%'
+            AND a.gene_id NOT LIKE '%%PAR%%'
         GROUP BY 
             a.gene_name, patient_id 
         ORDER BY 
-            a.gene_name, patient_id;'''
+            a.gene_name, patient_id; ''' % (unstranded_column, unstranded_column)
+
+        print(sql)
 
         try:
             with self.conn.cursor() as cursor:
                 cursor.execute(sql)
                 result = cursor.fetchall()
-                df_cleaned = pd.DataFrame(result, columns=['gene_name', 'patient_id', 'fpkm_value'])
+                df_cleaned = pd.DataFrame(result, columns=['gene_name', 'patient_id', unstranded_column])
                 output_csv_path = os.path.join(out_file_path, f"cleaned_genomic_data_{date}.csv")
                 df_cleaned.to_csv(output_csv_path, index=False)
                 print(f"Cleaned genomic data saved to {output_csv_path}")
@@ -164,9 +165,9 @@ class GenomicDataCleaner:
             print(f"Error inserting TSV data into database: {e}")
             self.conn.rollback()
 
-    def transform_genomic_data(self, outfile_path, hallmarks_data_path, output_file_path,fill_type='mean', cancer_type='gbm'):
+    def transform_genomic_data(self, outfile_path, hallmarks_data_path, output_file_path, unstranded_column,fill_type='mean', cancer_type='gbm'):
         genomic_data = pd.read_csv(outfile_path)
-        genomic_data.rename(columns={0: 'gene_name', 1:'patient_id', 2:'fpkm_value'}, inplace=True)
+        genomic_data.rename(columns={0: 'gene_name', 1:'patient_id', 2:unstranded_column}, inplace=True)
         hallmark_df = pd.read_csv(hallmarks_data_path)
         hallmark_gene_df = hallmark_df.iloc[:, [0]]
         
@@ -180,7 +181,7 @@ class GenomicDataCleaner:
         df_pivot = df_filter.pivot_table(
             index="patient_id",
             columns="gene_name",
-            values="fpkm_value",
+            values=unstranded_column,
             aggfunc="sum",
             fill_value=0,
         )
