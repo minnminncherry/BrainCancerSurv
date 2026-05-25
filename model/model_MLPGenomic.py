@@ -51,13 +51,3 @@ class MLPGenomics(nn.Module):
         survival = torch.cumprod(1 - hazards, dim=1)
         risk = -torch.sum(survival, dim=1)
         return risk
-
-
-# class MLPGenomics(MLPOmics):
-#     def __init__(self, input_dim, output_dim, projection_dim=512, dropout=0.1):
-#         super().__init__(
-#             input_dim=input_dim,
-#             n_classes=output_dim,
-#             projection_dim=projection_dim,
-#             dropout=dropout,
-#         )

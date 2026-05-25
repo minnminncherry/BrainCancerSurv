@@ -19,14 +19,14 @@ def main(args):
             fold_indices=list(range(i, len(args.data_factory.metadata), folds))
         )
     
-        results_dict, (total_acc, total_loss, val_acc, val_loss), best_model_path, eval_results = _train_val(args, train_split, test_split, i)
+        results_dict, (train_cindex, total_loss, val_cindex, val_loss), best_model_path, eval_results = _train_val(args, train_split, test_split, i)
         model_paths.append(best_model_path)
         fold_metrics.append(
             {
                 "fold": i,
-                "train_acc": total_acc,
+                "train_cindex": train_cindex,
                 "train_loss": total_loss,
-                "final_val_acc": val_acc,
+                "final_val_cindex": val_cindex,
                 "final_val_loss": val_loss,
                 "best_model_path": best_model_path,
             }
@@ -37,9 +37,9 @@ def main(args):
 
     save_final_fold_summary(fold_metrics, args.modality, args.genomic_file_name)
     if fold_metrics:
-        avg_val_acc = float(np.mean([metric["final_val_acc"] for metric in fold_metrics]))
+        avg_val_cindex = float(np.mean([metric["final_val_cindex"] for metric in fold_metrics]))
         avg_val_loss = float(np.mean([metric["final_val_loss"] for metric in fold_metrics]))
-        print(f"\nAverage final val_acc across {folds} folds: {avg_val_acc:.4f}")
+        print(f"\nAverage final val_cindex across {folds} folds: {avg_val_cindex:.4f}")
         print(f"Average final val_loss across {folds} folds: {avg_val_loss:.4f}")
 
     print(f"\nTraining completed! All models saved to result/model_checkpoints/")

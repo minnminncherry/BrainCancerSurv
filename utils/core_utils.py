@@ -1,19 +1,14 @@
 import torch
 import torch.nn as nn
 from model.model_MLPGenomic import MLPGenomics
-from model.model_KmeanGenomic import KMeansGenomics
-from model.model_XGBoost import train_xgboost_fold
-import torch.optim as optim 
-from torch.utils.data import TensorDataset, DataLoader
+from model.model_SNN import SNNGenomics
+from model.model_Gen2vec import Gen2VecGenomics
 import os
 import pickle
 import pandas as pd
+import torch.optim as optim
 from .general_utils import _get_split_loader 
-from transformers import (
-    get_constant_schedule_with_warmup, 
-    get_linear_schedule_with_warmup, 
-    get_cosine_schedule_with_warmup
-)
+from transformers import get_linear_schedule_with_warmup
 
 def _get_result_dir():
     return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "result"))
@@ -23,11 +18,7 @@ def _save_pkl(filename, save_object):
         pickle.dump(save_object, writer)
 
 def _train_val(args, train_dataset, test_dataset, cur):
-    if args.modality == "xgboost":
-        result_dir = _get_result_dir()
-        return train_xgboost_fold(args, train_dataset, test_dataset, cur, result_dir)
 
-    # Placeholder: returns selected criterion for now.
     loss_func = _init_loss_function(args)
 
     model = _init_model(args)
@@ -38,7 +29,7 @@ def _train_val(args, train_dataset, test_dataset, cur):
 
     lr_scheduler = _get_lr_scheduler(args, optimizer, train_loader)
 
-    results_dict, (total_acc, total_loss), best_model_path = train_model(
+    results_dict, (train_cindex, total_loss), best_model_path = train_model(
         cur,
         args,
         loss_func,
@@ -47,14 +38,14 @@ def _train_val(args, train_dataset, test_dataset, cur):
         lr_scheduler,
         train_loader
     )
-    eval_results, final_val_acc, final_val_loss = _evaluate_classification(
+    eval_results, final_val_cindex, final_val_loss = _evaluate_classification(
         cur,
         model,
         val_loader,
         loss_func,
         checkpoint_path=best_model_path
     )
-    return results_dict, (total_acc, total_loss, final_val_acc, final_val_loss), best_model_path, eval_results
+    return results_dict, (train_cindex, total_loss, final_val_cindex, final_val_loss), best_model_path, eval_results
 
 def _init_loss_function(args):
     """
@@ -72,17 +63,43 @@ def _init_loss_function(args):
     raise ValueError(f"Unsupported loss_func: {loss_name}")
 
 
-def compute_loss(logits, targets, criterion):
+def prediction_probs(logits):
+    return torch.softmax(logits, dim=1)
+
+
+def risk_scores(logits):
+    probs = torch.softmax(logits, dim=1)
+    class_ids = torch.arange(logits.size(1), device=logits.device, dtype=probs.dtype)
+    return -torch.sum(probs * class_ids, dim=1)
+
+
+def concordance_index(event_times, censorships, risks):
     """
-    Compute loss with safe dtype shaping for common genomic setups.
+    Harrell-style C-index. `censorship=0` means event observed, `1` means censored.
+    Higher risk should correspond to shorter survival time.
     """
-    if isinstance(criterion, nn.CrossEntropyLoss):
-        # logits: [N, C], targets: [N]
-        return criterion(logits, targets.long())
-    if isinstance(criterion, nn.BCEWithLogitsLoss):
-        # logits/targets: [N] or [N, 1]
-        return criterion(logits.float(), targets.float())
-    return criterion(logits, targets)
+    event_times = list(event_times)
+    censorships = list(censorships)
+    risks = list(risks)
+    concordant = 0.0
+    comparable = 0
+
+    for i in range(len(event_times)):
+        for j in range(i + 1, len(event_times)):
+            t_i, t_j = float(event_times[i]), float(event_times[j])
+            c_i, c_j = float(censorships[i]), float(censorships[j])
+            r_i, r_j = float(risks[i]), float(risks[j])
+
+            if t_i == t_j:
+                continue
+            if t_i < t_j and c_i == 0.0:
+                comparable += 1
+                concordant += 1.0 if r_i > r_j else 0.5 if r_i == r_j else 0.0
+            elif t_j < t_i and c_j == 0.0:
+                comparable += 1
+                concordant += 1.0 if r_j > r_i else 0.5 if r_i == r_j else 0.0
+
+    return concordant / comparable if comparable > 0 else 0.0
 
 def _init_model(args):
     if hasattr(args, "data_factory") and hasattr(args.data_factory, "genomic_feature_cols"):
@@ -92,7 +109,7 @@ def _init_model(args):
     else:
         raise ValueError("Unable to determine genomic input dimension from the dataset.")
     
-    if args.modality in {'mlp', 'omics', 'snn', 'mlp_per_path'}:
+    if args.modality == 'mlp':
         dropout = float(getattr(args, "encoder_dropout", 0.1))
         model_dict = {
              "input_dim": genomic_input_dim,
@@ -101,18 +118,25 @@ def _init_model(args):
              "dropout": dropout,
         }
         model = MLPGenomics(**model_dict)
-    elif args.modality == "kmeans":
-        dropout = float(getattr(args, "encoder_dropout", 0.1))
+    elif args.modality == "snn":
+        dropout = float(getattr(args, "encoder_dropout", 0.25))
         model_dict = {
             "input_dim": genomic_input_dim,
-            "output_dim": int(args.n_classes),
-            "num_clusters": int(getattr(args, "num_clusters", 8)),
-            "projection_dim": 64,
+            "n_classes": int(args.n_classes),
+            "hidden_dim": 256,
             "dropout": dropout,
         }
-        model = KMeansGenomics(**model_dict)
-    elif args.modality == "xgboost":
-        return None
+        model = SNNGenomics(**model_dict)
+    elif args.modality == "gen2vec":
+        dropout = float(getattr(args, "encoder_dropout", 0.25))
+        model_dict = {
+            "input_dim": genomic_input_dim,
+            "n_classes": int(args.n_classes),
+            "embedding_dim": int(getattr(args, "gen2vec_embedding_dim", 64)),
+            "hidden_dim": int(getattr(args, "gen2vec_hidden_dim", 128)),
+            "dropout": dropout,
+        }
+        model = Gen2VecGenomics(**model_dict)
     else:
         raise NotImplementedError(f"Modality {args.modality} not implemented")
     
@@ -128,36 +152,6 @@ def _init_optim(args, model):
         optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=0.9)
     
     return optimizer
-
-# def _init_loader(args, train_dataset, test_dataset):
-#     """
-#     Build simple DataLoaders from split dicts:
-#     train_dataset/test_dataset = {"x": np.ndarray, "y": np.ndarray, ...}
-#     """
-#     batch_size = int(getattr(args, "batch_size", 32))
-#     num_workers = int(getattr(args, "num_workers", 0))
-
-#     x_train = torch.tensor(train_dataset["x"], dtype=torch.float32)
-#     y_train = torch.tensor(train_dataset["y"], dtype=torch.long)
-#     x_test = torch.tensor(test_dataset["x"], dtype=torch.float32)
-#     y_test = torch.tensor(test_dataset["y"], dtype=torch.long)
-
-#     train_ds = TensorDataset(x_train, y_train)
-#     val_ds = TensorDataset(x_test, y_test)
-
-#     train_loader = DataLoader(
-#         train_ds,
-#         batch_size=batch_size,
-#         shuffle=True,
-#         num_workers=num_workers,
-#     )
-#     val_loader = DataLoader(
-#         val_ds,
-#         batch_size=batch_size,
-#         shuffle=False,
-#         num_workers=num_workers,
-#     )
-#     return train_loader, val_loader
 
 def _init_loader(args, train_dataset, test_dataset):
     if args.modality == "xgboost":
@@ -202,8 +196,10 @@ def _evaluate_classification(cur, model, val_loader, loss_func, checkpoint_path=
     model.eval()
 
     total_loss_sum = 0.0
-    total_correct = 0
     total_count = 0
+    all_event_times = []
+    all_censorships = []
+    all_risks = []
     sample_counter = 0
     patient_results = {}
     output_rows = []
@@ -213,23 +209,33 @@ def _evaluate_classification(cur, model, val_loader, loss_func, checkpoint_path=
 
             x_batch = x_batch.to(device)
             y_batch = y_batch.to(device)
+            event_time_batch = event_time_batch.to(device)
+            censor_batch = censor_batch.to(device)
 
             logits = model(x_batch)
-            loss = compute_loss(logits, y_batch, loss_func)
-            probs = torch.softmax(logits, dim=1)
-            preds = torch.argmax(logits, dim=1)
+            if isinstance(loss_func, nn.BCEWithLogitsLoss):
+                loss = loss_func(logits.float(), y_batch.float())
+            else:
+                loss = loss_func(logits, y_batch.long())
+            probs = prediction_probs(logits)
+            preds = torch.argmax(probs, dim=1)
+            target_bins = y_batch.long()
+            risks = risk_scores(logits)
 
             batch_size = y_batch.size(0)
             total_loss_sum += float(loss.item()) * batch_size
-            total_correct += int((preds == y_batch).sum().item())
             total_count += int(batch_size)
 
             probs_np = probs.detach().cpu().numpy()
             logits_np = logits.detach().cpu().numpy()
             preds_np = preds.detach().cpu().numpy()
-            labels_np = y_batch.detach().cpu().numpy()
+            labels_np = target_bins.detach().cpu().numpy()
             event_time_np = event_time_batch.detach().cpu().numpy()
             censor_np = censor_batch.detach().cpu().numpy()
+            risks_np = risks.detach().cpu().numpy()
+            all_event_times.extend(event_time_np.tolist())
+            all_censorships.extend(censor_np.tolist())
+            all_risks.extend(risks_np.tolist())
 
             for batch_idx in range(batch_size):
                 case_id = _extract_case_id(clinical_data_list[batch_idx], sample_counter)
@@ -242,6 +248,7 @@ def _evaluate_classification(cur, model, val_loader, loss_func, checkpoint_path=
                     "clinical": clinical_data_list[batch_idx],
                     "logits": logits_np[batch_idx],
                     "probabilities": probs_np[batch_idx],
+                    "risk": float(risks_np[batch_idx]),
                 }
                 row = {
                     "case_id": case_id,
@@ -250,6 +257,7 @@ def _evaluate_classification(cur, model, val_loader, loss_func, checkpoint_path=
                     "correct": bool(preds_np[batch_idx] == labels_np[batch_idx]),
                     "event_time": float(event_time_np[batch_idx]),
                     "censorship": float(censor_np[batch_idx]),
+                    "risk": float(risks_np[batch_idx]),
                 }
                 for class_idx, prob in enumerate(probs_np[batch_idx]):
                     row[f"prob_class_{class_idx}"] = float(prob)
@@ -258,7 +266,7 @@ def _evaluate_classification(cur, model, val_loader, loss_func, checkpoint_path=
                 sample_counter += 1
 
     final_val_loss = total_loss_sum / max(total_count, 1)
-    final_val_acc = total_correct / max(total_count, 1)
+    final_val_cindex = concordance_index(all_event_times, all_censorships, all_risks)
 
     result_dir = _get_result_dir()
     checkpoint_dir = os.path.join(result_dir, "model_checkpoints")
@@ -272,9 +280,9 @@ def _evaluate_classification(cur, model, val_loader, loss_func, checkpoint_path=
 
 
     print(f"[Fold {cur}] Final evaluation saved to: {pkl_path}")
-    print(f"[Fold {cur}] Final val_acc={final_val_acc:.4f}, val_loss={final_val_loss:.4f}")
+    print(f"[Fold {cur}] Final val_cindex={final_val_cindex:.4f}, val_loss={final_val_loss:.4f}")
 
-    return patient_results, final_val_acc, final_val_loss
+    return patient_results, final_val_cindex, final_val_loss
 
 
 def train_model(cur, args, loss_func, model, optimizer, lr_scheduler, train_loader):
@@ -292,30 +300,34 @@ def train_model(cur, args, loss_func, model, optimizer, lr_scheduler, train_load
 
     history = {
         "train_loss": [],
-        "train_acc": [],
+        "train_cindex": [],
     }
 
     for epoch_idx in range(epochs):
         model.train()
         train_loss_sum = 0.0
-        train_correct = 0
         train_count = 0
+        all_event_times = []
+        all_censorships = []
+        all_risks = []
 
         for batch in train_loader:
-            if args.modality in {"mlp", "kmeans"}:
-                _, x_batch, y_batch, _, _, _ = batch
-            else:
-                x_batch, y_batch = batch
+            if args.modality in {"mlp", "omics", "mlp_per_path", "snn", "gen2vec", "kmeans"}:
+                _, x_batch, y_batch, event_time_batch, censor_batch, _ = batch
 
             # print(f"Batch x shape: {x_batch.shape}, y shape: {y_batch.shape}")
             # print(f"Header of batch x: {x_batch[0][:5]}, batch y: {y_batch[0]}")
 
             x_batch = x_batch.to(device)
             y_batch = y_batch.to(device)
+            if event_time_batch is not None:
+                event_time_batch = event_time_batch.to(device)
+            if censor_batch is not None:
+                censor_batch = censor_batch.to(device)
 
             optimizer.zero_grad()
             logits = model(x_batch)
-            loss = compute_loss(logits, y_batch, loss_func)
+            loss = loss_func(logits, y_batch.long())
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
@@ -324,90 +336,34 @@ def train_model(cur, args, loss_func, model, optimizer, lr_scheduler, train_load
 
             batch_size = y_batch.size(0)
             train_loss_sum += float(loss.item()) * batch_size
-            preds = torch.argmax(logits, dim=1)
-            train_correct += int((preds == y_batch).sum().item())
+            probs = prediction_probs(logits)
+            preds = torch.argmax(probs, dim=1)
+            target_bins = y_batch.long()
+            risks = risk_scores(logits)
+            if event_time_batch is not None and censor_batch is not None:
+                all_event_times.extend(event_time_batch.detach().cpu().numpy().tolist())
+                all_censorships.extend(censor_batch.detach().cpu().numpy().tolist())
+                all_risks.extend(risks.detach().cpu().numpy().tolist())
             train_count += int(batch_size)
-            print(f"Batch {train_count} | Loss: {loss.item():.4f} | Batch Acc: {(preds == y_batch).float().mean().item():.4f}")
+            print(f"Batch {train_count} | Loss: {loss.item():.4f} | Batch Bin Acc: {(preds == target_bins).float().mean().item():.4f}")
 
         train_loss = train_loss_sum / max(train_count, 1)
-        train_acc = train_correct / max(train_count, 1)
+        train_cindex = concordance_index(all_event_times, all_censorships, all_risks)
 
         history["train_loss"].append(train_loss)
-        history["train_acc"].append(train_acc)
+        history["train_cindex"].append(train_cindex)
         print(
             f"[Fold {cur}] Epoch {epoch_idx + 1}/{epochs} | "
-            f"train_loss={train_loss:.4f}, train_acc={train_acc:.4f}"
+            f"train_loss={train_loss:.4f}, train_cindex={train_cindex:.4f}"
         )
 
     torch.save(model.state_dict(), final_model_path)
     print(f"[Fold {cur}] Final model saved to: {final_model_path}")
 
-    total_acc = history["train_acc"][-1] if history["train_acc"] else 0.0
+    total_cindex = history["train_cindex"][-1] if history["train_cindex"] else 0.0
     total_loss = history["train_loss"][-1] if history["train_loss"] else 0.0
     
-    return history, (total_acc, total_loss), final_model_path
-
-
-# def save_training_history_csv(args, history, cur=0, output_dir=None):
-#     """
-#     Save epoch-wise history and per-fold best metrics to CSV.
-#     """
-#     if output_dir is None:
-#         output_dir = _get_result_dir()
-#     os.makedirs(output_dir, exist_ok=True)
-
-#     df = pd.DataFrame(
-#         {
-#             "epoch": list(range(1, len(history.get("train_loss", [])) + 1)),
-#             "train_loss": history.get("train_loss", []),
-#             "train_acc": history.get("train_acc", []),
-#             "val_loss": history.get("val_loss", []),
-#             "val_acc": history.get("val_acc", []),
-#         }
-#     )
-#     save_path = os.path.join(output_dir, f"training_history_fold_{cur}.csv")
-#     df.to_csv(save_path, index=False)
-#     print(f"Saved training history to: {save_path}")
-
-#     # Per-fold best summary (greatest accuracy, smallest loss).
-#     if len(df) > 0:
-#         best_train_acc_idx = int(df["train_acc"].idxmax())
-#         best_val_acc_idx = int(df["val_acc"].idxmax())
-#         best_train_loss_idx = int(df["train_loss"].idxmin())
-#         best_val_loss_idx = int(df["val_loss"].idxmin())
-
-#         summary_row = {
-#             "fold": cur,
-#             "best_train_acc": float(df.loc[best_train_acc_idx, "train_acc"]),
-#             "best_train_acc_epoch": int(df.loc[best_train_acc_idx, "epoch"]),
-#             "best_val_acc": float(df.loc[best_val_acc_idx, "val_acc"]),
-#             "best_val_acc_epoch": int(df.loc[best_val_acc_idx, "epoch"]),
-#             "best_train_loss": float(df.loc[best_train_loss_idx, "train_loss"]),
-#             "best_train_loss_epoch": int(df.loc[best_train_loss_idx, "epoch"]),
-#             "best_val_loss": float(df.loc[best_val_loss_idx, "val_loss"]),
-#             "best_val_loss_epoch": int(df.loc[best_val_loss_idx, "epoch"]),
-#         }
-
-#         # Keep one row per fold in a shared summary file.
-#         summary_path = os.path.join(output_dir, "training_best_by_fold.csv")
-#         if os.path.exists(summary_path):
-#             summary_df = pd.read_csv(summary_path)
-#             summary_df = summary_df[summary_df["fold"] != cur]
-#             summary_df = pd.concat([summary_df, pd.DataFrame([summary_row])], ignore_index=True)
-#         else:
-#             summary_df = pd.DataFrame([summary_row])
-
-#         summary_df = summary_df.sort_values("fold").reset_index(drop=True)
-#         summary_df.to_csv(summary_path, index=False)
-#         print(
-#             f"[Fold {cur}] best_val_acc={summary_row['best_val_acc']:.4f} "
-#             f"(epoch {summary_row['best_val_acc_epoch']}), "
-#             f"best_val_loss={summary_row['best_val_loss']:.4f} "
-#             f"(epoch {summary_row['best_val_loss_epoch']})"
-#         )
-#         print(f"Saved per-fold best summary to: {summary_path}")
-
-#     return save_path
+    return history, (total_cindex, total_loss), final_model_path
 
 def save_final_fold_summary(fold_metrics, model, genomic_file_name, output_dir=None):
     """
@@ -421,9 +377,9 @@ def save_final_fold_summary(fold_metrics, model, genomic_file_name, output_dir=N
     average_row = pd.DataFrame(
         [{
             "fold": "average",
-            "train_acc": float(summary_df["train_acc"].mean()) if len(summary_df) else 0.0,
+            "train_cindex": float(summary_df["train_cindex"].mean()) if len(summary_df) else 0.0,
             "train_loss": float(summary_df["train_loss"].mean()) if len(summary_df) else 0.0,
-            "final_val_acc": float(summary_df["final_val_acc"].mean()) if len(summary_df) else 0.0,
+            "final_val_cindex": float(summary_df["final_val_cindex"].mean()) if len(summary_df) else 0.0,
             "final_val_loss": float(summary_df["final_val_loss"].mean()) if len(summary_df) else 0.0,
             "best_model_path": "",
         }]
@@ -436,12 +392,3 @@ def save_final_fold_summary(fold_metrics, model, genomic_file_name, output_dir=N
     summary_df.to_csv(summary_path, index=False)
     print(f"Saved final cross-fold summary to: {summary_path}")
     return summary_path
-
-# def calculate_average_accuracy_model_path(args):
-#     # calculate the average accuracy across all folds and return the average accuracy of training and validation.
-#     summary_path = os.path.join(os.getcwd(), "../result")
-#     avg_acc = 0.0
-#     for model_path in model_paths:
-
-    
-#     return avg_acc

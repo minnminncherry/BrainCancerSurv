@@ -15,6 +15,7 @@ def _process_args():
     parser.add_argument("--modality", type=str, default="mlp", help="Input modality/model family.")
     parser.add_argument("--opt", type=str, default="adam", help="Optimizer name.")
     parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate.")
+    parser.add_argument("--reg", type=float, default=0.0, help="Weight decay regularization for optimizers that support it.")
     parser.add_argument('--loss_func', type=str, default='', help='Declare the loss function')
     parser.add_argument("--epoch", type=int, default=10, help="Number of training epochs.")
     parser.add_argument("--batch_size", type=int, default=32, help="Batch size.")
