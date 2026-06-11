@@ -7,11 +7,12 @@ class MLPGenomics(nn.Module):
         self,
         input_dim,
         n_classes=4,
-        projection_dim=512,
+        projection_dim=256,
         dropout=0.1,
     ):
         super(MLPGenomics, self).__init__()
         self.projection_dim = projection_dim
+        self.n_classes = n_classes
 
 
         self.net = nn.Sequential(
@@ -34,7 +35,10 @@ class MLPGenomics(nn.Module):
         if not torch.is_tensor(data_omics):
             raise TypeError("Omics input must be a torch.Tensor.")
 
-        return data_omics.float().squeeze()
+        data_omics = data_omics.float()
+        if data_omics.dim() == 1:
+            data_omics = data_omics.unsqueeze(0)
+        return data_omics
 
     def forward(self, x=None, **kwargs):
         data_omics = self._get_omics_tensor(x=x, **kwargs)

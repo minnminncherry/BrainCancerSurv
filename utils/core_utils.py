@@ -3,6 +3,7 @@ import torch.nn as nn
 from model.model_MLPGenomic import MLPGenomics
 from model.model_SNN import SNNGenomics
 from model.model_Gen2vec import Gen2VecGenomics
+from model.model_resnet_mlp import ResMLPGenomics
 import os
 import pickle
 import pandas as pd
@@ -108,18 +109,22 @@ def _init_model(args):
         genomic_input_dim = 4371
     else:
         raise ValueError("Unable to determine genomic input dimension from the dataset.")
+
+    def _get_dropout(default):
+        value = getattr(args, "encoder_dropout", None)
+        return float(default if value is None else value)
     
     if args.modality == 'mlp':
-        dropout = float(getattr(args, "encoder_dropout", 0.1))
+        dropout = _get_dropout(0.2)
         model_dict = {
              "input_dim": genomic_input_dim,
              "n_classes": int(args.n_classes),
-             "projection_dim": 64,
+             "projection_dim": 256,
              "dropout": dropout,
         }
         model = MLPGenomics(**model_dict)
     elif args.modality == "snn":
-        dropout = float(getattr(args, "encoder_dropout", 0.25))
+        dropout = _get_dropout(0.2)
         model_dict = {
             "input_dim": genomic_input_dim,
             "n_classes": int(args.n_classes),
@@ -128,15 +133,25 @@ def _init_model(args):
         }
         model = SNNGenomics(**model_dict)
     elif args.modality == "gen2vec":
-        dropout = float(getattr(args, "encoder_dropout", 0.25))
+        dropout = _get_dropout(0.2)
         model_dict = {
             "input_dim": genomic_input_dim,
             "n_classes": int(args.n_classes),
-            "embedding_dim": int(getattr(args, "gen2vec_embedding_dim", 64)),
-            "hidden_dim": int(getattr(args, "gen2vec_hidden_dim", 128)),
+            "embedding_dim": int(getattr(args, "gen2vec_embedding_dim", 256)),
+            "hidden_dim": int(getattr(args, "gen2vec_hidden_dim", 256)),
             "dropout": dropout,
+            "use_zero_mask": True
         }
         model = Gen2VecGenomics(**model_dict)
+    elif args.modality == "resmlp":
+        dropout = _get_dropout(0.2)
+        model_dict = {
+            "input_dim": genomic_input_dim,
+            "n_classes": int(args.n_classes),
+            "hidden_dim": int(getattr(args, "resmlp_hidden_dim", 256)),
+            "dropout": dropout,
+        }
+        model = ResMLPGenomics(**model_dict)
     else:
         raise NotImplementedError(f"Modality {args.modality} not implemented")
     
@@ -312,7 +327,7 @@ def train_model(cur, args, loss_func, model, optimizer, lr_scheduler, train_load
         all_risks = []
 
         for batch in train_loader:
-            if args.modality in {"mlp", "omics", "mlp_per_path", "snn", "gen2vec", "kmeans"}:
+            if args.modality in {"mlp", "omics", "mlp_per_path", "snn", "gen2vec", "resmlp"}:
                 _, x_batch, y_batch, event_time_batch, censor_batch, _ = batch
 
             # print(f"Batch x shape: {x_batch.shape}, y shape: {y_batch.shape}")
@@ -356,6 +371,9 @@ def train_model(cur, args, loss_func, model, optimizer, lr_scheduler, train_load
             f"[Fold {cur}] Epoch {epoch_idx + 1}/{epochs} | "
             f"train_loss={train_loss:.4f}, train_cindex={train_cindex:.4f}"
         )
+
+        # Convert history dict to a DataFrame before saving to CSV
+        pd.DataFrame(history).to_csv(os.path.join(model_save_dir, f"training_history_fold_{cur}.csv"), index=False)
 
     torch.save(model.state_dict(), final_model_path)
     print(f"[Fold {cur}] Final model saved to: {final_model_path}")

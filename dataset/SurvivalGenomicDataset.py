@@ -294,3 +294,8 @@ class SurvivalGenomicDataset:
 
     def __len__(self):
         return len(self.metadata)
+    
+    def _load_wsi_embs_from_path(self, wsi_emb_path):
+        if not os.path.exists(wsi_emb_path):
+            raise FileNotFoundError(f"WSI embedding file not found: {wsi_emb_path}")
+        return torch.load(wsi_emb_path)

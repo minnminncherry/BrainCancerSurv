@@ -19,7 +19,7 @@ def _get_split_loader(args, split_dataset, training=False, testing=False, weight
     """
     kwargs = {"num_workers": args.num_workers} if torch.cuda.is_available() else {}
     
-    if args.modality in ["mlp", "snn", "gen2vec"]:
+    if args.modality in ["mlp", "snn", "gen2vec", "resmlp", "resnet_mlp"]:
         collate_fn = _collate_genomic
     else:
         raise NotImplementedError(f"Modality {args.modality} not implemented")
