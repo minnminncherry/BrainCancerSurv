@@ -12,7 +12,8 @@ def main(args1, args2=None, args3=None):
 
     db_name = None
     date = pd.Timestamp.now().strftime("%Y-%m-%d")
-    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    script_dir = os.path.abspath(os.path.dirname(__file__))
+    project_root = os.path.abspath(os.path.join(script_dir, ".."))
     yaml_file_path = os.path.join(project_root, "config.yaml")
     with open(yaml_file_path, 'r') as file:
         data = yaml.safe_load(file)
@@ -23,10 +24,10 @@ def main(args1, args2=None, args3=None):
         final_genomic_data_file_name = data['gbm_clean_file_paths']['final_genomic_data_file_name']
         json_file_path = os.path.join(input_dir, data['gbm_src_file_paths']['genomic_metadata_file_name'])
         db_name = data['database']['database_name_gbm']
-        wsi_input_dir = os.path.join(os.getcwd(), data['WSI_file_path']['gbm_wsi_input_file_path'])
-        wsi_output_dir = os.path.join(os.getcwd(), data['WSI_file_path']['gbm_wsi_output_file_path'])
-        wsi_metadata_file_path = os.path.join(os.getcwd(), data['WSI_file_path']['gbm_wsi_metadata_file_path'])
-        wsi_final_file_path = os.path.join(os.getcwd(), data['WSI_file_path']['gbm_wsi_final_file_path'])
+        wsi_input_dir = os.path.abspath(os.path.join(script_dir, data['WSI_file_path']['gbm_wsi_input_file_path']))
+        wsi_output_dir = os.path.abspath(os.path.join(script_dir, data['WSI_file_path']['gbm_wsi_output_file_path']))
+        wsi_metadata_file_path = os.path.abspath(os.path.join(script_dir, data['WSI_file_path']['gbm_wsi_metadata_file_path']))
+        wsi_final_file_path = os.path.abspath(os.path.join(script_dir, data['WSI_file_path']['gbm_wsi_final_file_path']))
     elif (args2 == 'lgg'):
         input_dir = data['lgg_src_file_paths']['genomic_data_dir']
         output_dir = data['lgg_clean_file_paths']['genomic_data_dir']
@@ -34,10 +35,10 @@ def main(args1, args2=None, args3=None):
         final_genomic_data_file_name = data['lgg_clean_file_paths']['final_genomic_data_file_name']
         db_name = data['database']['database_name_lgg']
         json_file_path = os.path.join(input_dir, data['lgg_src_file_paths']['genomic_metadata_file_name'])
-        wsi_input_dir = os.path.join(os.getcwd(), data['WSI_file_path']['lgg_wsi_input_file_path'])
-        wsi_output_dir = os.path.join(os.getcwd(), data['WSI_file_path']['lgg_wsi_output_file_path'])
-        wsi_metadata_file_path = os.path.join(os.getcwd(), data['WSI_file_path']['lgg_wsi_metadata_file_path'])
-        wsi_final_file_path = os.path.join(os.getcwd(), data['WSI_file_path']['lgg_wsi_final_file_path'])
+        wsi_input_dir = os.path.abspath(os.path.join(script_dir, data['WSI_file_path']['lgg_wsi_input_file_path']))
+        wsi_output_dir = os.path.abspath(os.path.join(script_dir, data['WSI_file_path']['lgg_wsi_output_file_path']))
+        wsi_metadata_file_path = os.path.abspath(os.path.join(script_dir, data['WSI_file_path']['lgg_wsi_metadata_file_path']))
+        wsi_final_file_path = os.path.abspath(os.path.join(script_dir, data['WSI_file_path']['lgg_wsi_final_file_path']))
     else:
         print("Invalid cancer type provided. Please specify 'gbm' or 'lgg'.")
         return
@@ -141,14 +142,29 @@ def main(args1, args2=None, args3=None):
         
     elif(args1 == 'FORMAT_CHANGE_SVS_TO_PT'):
         if args2 == 'gbm':
-            wsi_cls.WSI_format_change_pt(wsi_output_dir, wsi_input_dir, wsi_final_file_path+f"/gbm_wsi_metadata.csv")
+            wsi_cls.WSI_format_change_pt(
+                wsi_output_dir,
+                wsi_input_dir
+            )
         elif args2 == 'lgg':
-            wsi_cls.WSI_format_change_pt(wsi_output_dir, wsi_input_dir, wsi_final_file_path+f"/lgg_wsi_metadata.csv")
+            wsi_cls.WSI_format_change_pt(
+                wsi_output_dir,
+                wsi_input_dir
+            )
     
     elif(args1 == 'INSERT_WSI_METADATA_TO_DB'):
         if wsi_cls.conn:
             json_data = wsi_cls.get_wsi_metadata_json_data(wsi_metadata_file_path)
             wsi_cls.insert_wsi_json_data_to_db(json_data, "wsi_metadata_json_data")
+        else:
+            print("Failed to connect to database")
+
+    elif(args1 == 'GENERATE_WSI_METADATA_CSV'):
+        if wsi_cls.conn:
+            if args2 == 'gbm':
+                wsi_cls.generate_wsi_metadata_csv(os.path.join(wsi_final_file_path, "wsi_metadata_gbm.csv"))
+            elif args2 == 'lgg':
+                wsi_cls.generate_wsi_metadata_csv(os.path.join(wsi_final_file_path, "wsi_metadata_lgg.csv"))
         else:
             print("Failed to connect to database")
 

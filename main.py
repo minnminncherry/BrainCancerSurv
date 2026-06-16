@@ -2,6 +2,7 @@ import pandas as pd
 import os
 import numpy as np
 from dataset.SurvivalGenomicDataset import SurvivalGenomicDataset
+from dataset.SurvivalWSIDataset import SurvivalSplitWSIDataset
 from utils.process_args import _process_args
 from utils.core_utils import _train_val, save_final_fold_summary
 
@@ -47,21 +48,27 @@ def main(args):
 
 if __name__ == "__main__":
     args = _process_args()
-    data_factory = SurvivalGenomicDataset(
-        label_file=args.label_file,
-        genomic_dir=args.genomic_dir,
-        genomic_file_name=args.genomic_file_name,
-        seed=args.seed,
-        label_col=args.label_col,
-        n_bins=args.n_bins,
-        n_classes=args.n_classes,
-        type_of_pathway=args.type_of_pathway,
-        modality=args.modality,
-        opt=args.opt,
-        lr=args.lr,
-        batch_size=args.batch_size,
-        num_workers=args.num_workers,
-    )
+    data_fac = args.data_factory
+    
+    if(data_fac == 'SurvivalGenomicDataset'):
+        data_factory = data_fac(
+            label_file=args.label_file,
+            genomic_dir=args.genomic_dir,
+            genomic_file_name=args.genomic_file_name,
+            seed=args.seed,
+            label_col=args.label_col,
+            n_bins=args.n_bins,
+            n_classes=args.n_classes,
+            type_of_pathway=args.type_of_pathway,
+            modality=args.modality,
+            opt=args.opt,
+            lr=args.lr,
+            batch_size=args.batch_size,
+            num_workers=args.num_workers,
+        )
+    
+    elif(data_fac == 'SurvivalWSIDataset'):
+        data_factory = args.data
     args.data_factory = data_factory
     # print(args.data_factory.genomic_feature_cols)
     # print(len(args.data_factory.genomic_feature_cols))

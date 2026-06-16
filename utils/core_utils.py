@@ -1,9 +1,10 @@
 import torch
 import torch.nn as nn
-from model.model_MLPGenomic import MLPGenomics
-from model.model_SNN import SNNGenomics
-from model.model_Gen2vec import Gen2VecGenomics
-from model.model_resnet_mlp import ResMLPGenomics
+from model.model_MLP_gene import MLPGenomics
+from model.model_SNN_gene import SNNGenomics
+from model.model_Gen2vec_gene import Gen2VecGenomics
+from model.model_resnet_mlp_gene import ResMLPGenomics
+from model.model_MIL_wsi import MILWSI
 import os
 import pickle
 import pandas as pd
@@ -152,6 +153,15 @@ def _init_model(args):
             "dropout": dropout,
         }
         model = ResMLPGenomics(**model_dict)
+    elif args.modality == "mil":
+        dropout = _get_dropout(0.2)
+        model_dict = {
+            "input_dim": int(getattr(args, "wsi_feature_dim", 1024)),
+            "n_classes": int(args.n_classes),
+            "hidden_dim": 256,
+            "dropout": dropout,
+        }
+        model = MILWSI(**model_dict)
     else:
         raise NotImplementedError(f"Modality {args.modality} not implemented")
     
