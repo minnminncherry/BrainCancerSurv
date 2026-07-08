@@ -15,7 +15,7 @@ class MILWSI(nn.Module):
         logits: [batch_size, n_classes]
     """
 
-    def __init__(self, input_dim=1024, n_classes=4, hidden_dim=256, dropout=0.25):
+    def __init__(self, input_dim=512, n_classes=4, hidden_dim=256, dropout=0.25):
         super().__init__()
         self.input_dim = int(input_dim)
         self.n_classes = int(n_classes)
@@ -44,8 +44,10 @@ class MILWSI(nn.Module):
         if x.dim() != 3:
             raise ValueError("Expected input shape [num_patches, input_dim] or [batch, num_patches, input_dim].")
 
+        valid_patches = x.abs().sum(dim=-1) > 0
         patch_features = self.patch_encoder(x)
         attention_scores = self.attention(patch_features).squeeze(-1)
+        attention_scores = attention_scores.masked_fill(~valid_patches, -1e9)
         attention_weights = F.softmax(attention_scores, dim=1)
 
         bag_features = torch.sum(patch_features * attention_weights.unsqueeze(-1), dim=1)

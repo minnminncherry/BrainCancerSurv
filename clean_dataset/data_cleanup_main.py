@@ -25,9 +25,10 @@ def main(args1, args2=None, args3=None):
         json_file_path = os.path.join(input_dir, data['gbm_src_file_paths']['genomic_metadata_file_name'])
         db_name = data['database']['database_name_gbm']
         wsi_input_dir = os.path.abspath(os.path.join(script_dir, data['WSI_file_path']['gbm_wsi_input_file_path']))
-        wsi_output_dir = os.path.abspath(os.path.join(script_dir, data['WSI_file_path']['gbm_wsi_output_file_path']))
+        wsi_h5_dir = os.path.abspath(os.path.join(script_dir, data['WSI_file_path']['gbm_wsi_h5_file_path']))
         wsi_metadata_file_path = os.path.abspath(os.path.join(script_dir, data['WSI_file_path']['gbm_wsi_metadata_file_path']))
         wsi_final_file_path = os.path.abspath(os.path.join(script_dir, data['WSI_file_path']['gbm_wsi_final_file_path']))
+        wsi_new_file_path = os.path.abspath(os.path.join(script_dir, data['WSI_file_path']['gbm_wsi_new_file_path']))
     elif (args2 == 'lgg'):
         input_dir = data['lgg_src_file_paths']['genomic_data_dir']
         output_dir = data['lgg_clean_file_paths']['genomic_data_dir']
@@ -36,15 +37,16 @@ def main(args1, args2=None, args3=None):
         db_name = data['database']['database_name_lgg']
         json_file_path = os.path.join(input_dir, data['lgg_src_file_paths']['genomic_metadata_file_name'])
         wsi_input_dir = os.path.abspath(os.path.join(script_dir, data['WSI_file_path']['lgg_wsi_input_file_path']))
-        wsi_output_dir = os.path.abspath(os.path.join(script_dir, data['WSI_file_path']['lgg_wsi_output_file_path']))
+        wsi_h5_dir = os.path.abspath(os.path.join(script_dir, data['WSI_file_path']['lgg_wsi_h5_file_path']))
         wsi_metadata_file_path = os.path.abspath(os.path.join(script_dir, data['WSI_file_path']['lgg_wsi_metadata_file_path']))
         wsi_final_file_path = os.path.abspath(os.path.join(script_dir, data['WSI_file_path']['lgg_wsi_final_file_path']))
+        wsi_new_file_path = os.path.abspath(os.path.join(script_dir, data['WSI_file_path']['lgg_wsi_new_file_path']))
     else:
         print("Invalid cancer type provided. Please specify 'gbm' or 'lgg'.")
         return
     
     gen_cls = GenomicDataCleaner(input_dir, output_dir)
-    wsi_cls = WSIDataCleaner()
+    wsi_cls = WSIDataCleaner(wsi_final_file_path)
 
     if args1 != 'TEXT_TO_CSV':
         gen_cls.connect_db(db_name)
@@ -140,24 +142,30 @@ def main(args1, args2=None, args3=None):
         else:
             print("Invalid cancer type provided for TEXT_TO_CSV. Please specify 'gbm' or 'lgg'.")
         
-    elif(args1 == 'FORMAT_CHANGE_SVS_TO_PT'):
+    # elif(args1 == 'FORMAT_CHANGE_SVS_TO_PT'):
+    #     if args2 == 'gbm':
+    #         wsi_cls.WSI_format_change_h5(
+    #             512,
+    #             wsi_output_dir,
+    #             wsi_input_dir
+    #         )
+    #     elif args2 == 'lgg':
+    #         wsi_cls.WSI_format_change_h5(
+    #             512,
+    #             wsi_output_dir,
+    #             wsi_input_dir
+    #         )
+
+    elif(args1 == 'COPY_WSI_FILES_ONE_FOLDER'):
         if args2 == 'gbm':
-            wsi_cls.WSI_format_change_pt(
-                wsi_output_dir,
-                wsi_input_dir
-            )
+            wsi_cls.copy_wsi_files_to_one_folder(wsi_input_dir, wsi_new_file_path, wsi_final_file_path)
         elif args2 == 'lgg':
-            wsi_cls.WSI_format_change_pt(
-                wsi_output_dir,
-                wsi_input_dir
-            )
-    
+            wsi_cls.copy_wsi_files_to_one_folder(wsi_input_dir, wsi_new_file_path, wsi_final_file_path)
+
     elif(args1 == 'INSERT_WSI_METADATA_TO_DB'):
         if wsi_cls.conn:
             json_data = wsi_cls.get_wsi_metadata_json_data(wsi_metadata_file_path)
             wsi_cls.insert_wsi_json_data_to_db(json_data, "wsi_metadata_json_data")
-        else:
-            print("Failed to connect to database")
 
     elif(args1 == 'GENERATE_WSI_METADATA_CSV'):
         if wsi_cls.conn:
@@ -165,8 +173,10 @@ def main(args1, args2=None, args3=None):
                 wsi_cls.generate_wsi_metadata_csv(os.path.join(wsi_final_file_path, "wsi_metadata_gbm.csv"))
             elif args2 == 'lgg':
                 wsi_cls.generate_wsi_metadata_csv(os.path.join(wsi_final_file_path, "wsi_metadata_lgg.csv"))
-        else:
-            print("Failed to connect to database")
+
+    elif(args1 == 'INSERT_H5_FILE_NAMES_TO_DB'):
+        if wsi_cls.conn:
+            wsi_cls.insert_h5_filename_DB(wsi_h5_dir, "raw_wsi_h5_filenames")
 
     else:
         print("Invalid arguments provided")

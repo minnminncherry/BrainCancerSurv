@@ -6,9 +6,11 @@ from model.model_Gen2vec_gene import Gen2VecGenomics
 from model.model_resnet_mlp_gene import ResMLPGenomics
 from model.model_MIL_wsi import MILWSI
 import os
+import time
 import pickle
 import pandas as pd
 import torch.optim as optim
+from utils.constants import MODELCONSTANT
 from .general_utils import _get_split_loader 
 from transformers import get_linear_schedule_with_warmup
 
@@ -40,14 +42,26 @@ def _train_val(args, train_dataset, test_dataset, cur):
         lr_scheduler,
         train_loader
     )
-    eval_results, final_val_cindex, final_val_loss = _evaluate_classification(
+    eval_results, final_val_cindex, final_val_loss, inference_summary = _evaluate_classification(
         cur,
         model,
         val_loader,
         loss_func,
         checkpoint_path=best_model_path
     )
-    return results_dict, (train_cindex, total_loss, final_val_cindex, final_val_loss), best_model_path, eval_results
+    return (
+        results_dict,
+        (
+            train_cindex,
+            total_loss,
+            final_val_cindex,
+            final_val_loss,
+            inference_summary["inference_time_seconds"],
+            inference_summary["inference_time_per_sample_seconds"],
+        ),
+        best_model_path,
+        eval_results,
+    )
 
 def _init_loss_function(args):
     """
@@ -73,6 +87,19 @@ def risk_scores(logits):
     probs = torch.softmax(logits, dim=1)
     class_ids = torch.arange(logits.size(1), device=logits.device, dtype=probs.dtype)
     return -torch.sum(probs * class_ids, dim=1)
+
+def calculate_inference_time(model, x_batch, device):
+    """
+    Run one model forward pass and return logits plus elapsed inference time.
+    CUDA is synchronized so GPU timing is measured correctly.
+    """
+    if device.type == "cuda":
+        torch.cuda.synchronize(device)
+    start_time = time.perf_counter()
+    logits = model(x_batch)
+    if device.type == "cuda":
+        torch.cuda.synchronize(device)
+    return logits, time.perf_counter() - start_time
 
 
 def concordance_index(event_times, censorships, risks):
@@ -156,7 +183,7 @@ def _init_model(args):
     elif args.modality == "mil":
         dropout = _get_dropout(0.2)
         model_dict = {
-            "input_dim": int(getattr(args, "wsi_feature_dim", 1024)),
+            "input_dim": int(getattr(args, "wsi_feature_dim", 512)),
             "n_classes": int(args.n_classes),
             "hidden_dim": 256,
             "dropout": dropout,
@@ -179,8 +206,6 @@ def _init_optim(args, model):
     return optimizer
 
 def _init_loader(args, train_dataset, test_dataset):
-    if args.modality == "xgboost":
-        return None, None
     batch_size = int(getattr(args, "batch_size"))
     train_loader = _get_split_loader(args, train_dataset, training=True, batch_size=batch_size)
     val_loader = _get_split_loader(args, test_dataset, testing=True, batch_size=batch_size)
@@ -226,6 +251,8 @@ def _evaluate_classification(cur, model, val_loader, loss_func, checkpoint_path=
     all_censorships = []
     all_risks = []
     sample_counter = 0
+    inference_time_seconds = 0.0
+    inference_sample_count = 0
     patient_results = {}
     output_rows = []
     with torch.no_grad():
@@ -237,7 +264,10 @@ def _evaluate_classification(cur, model, val_loader, loss_func, checkpoint_path=
             event_time_batch = event_time_batch.to(device)
             censor_batch = censor_batch.to(device)
 
-            logits = model(x_batch)
+            batch_size = y_batch.size(0)
+            logits, batch_inference_time = calculate_inference_time(model, x_batch, device)
+            inference_time_seconds += float(batch_inference_time)
+            inference_sample_count += int(batch_size)
             if isinstance(loss_func, nn.BCEWithLogitsLoss):
                 loss = loss_func(logits.float(), y_batch.float())
             else:
@@ -247,7 +277,6 @@ def _evaluate_classification(cur, model, val_loader, loss_func, checkpoint_path=
             target_bins = y_batch.long()
             risks = risk_scores(logits)
 
-            batch_size = y_batch.size(0)
             total_loss_sum += float(loss.item()) * batch_size
             total_count += int(batch_size)
 
@@ -274,6 +303,7 @@ def _evaluate_classification(cur, model, val_loader, loss_func, checkpoint_path=
                     "logits": logits_np[batch_idx],
                     "probabilities": probs_np[batch_idx],
                     "risk": float(risks_np[batch_idx]),
+                    "inference_time_seconds": float(batch_inference_time / max(batch_size, 1)),
                 }
                 row = {
                     "case_id": case_id,
@@ -283,6 +313,7 @@ def _evaluate_classification(cur, model, val_loader, loss_func, checkpoint_path=
                     "event_time": float(event_time_np[batch_idx]),
                     "censorship": float(censor_np[batch_idx]),
                     "risk": float(risks_np[batch_idx]),
+                    "inference_time_seconds": float(batch_inference_time / max(batch_size, 1)),
                 }
                 for class_idx, prob in enumerate(probs_np[batch_idx]):
                     row[f"prob_class_{class_idx}"] = float(prob)
@@ -292,6 +323,11 @@ def _evaluate_classification(cur, model, val_loader, loss_func, checkpoint_path=
 
     final_val_loss = total_loss_sum / max(total_count, 1)
     final_val_cindex = concordance_index(all_event_times, all_censorships, all_risks)
+    inference_summary = {
+        "inference_time_seconds": float(inference_time_seconds),
+        "inference_time_per_sample_seconds": float(inference_time_seconds / max(inference_sample_count, 1)),
+        "num_inference_samples": int(inference_sample_count),
+    }
 
     result_dir = _get_result_dir()
     checkpoint_dir = os.path.join(result_dir, "model_checkpoints")
@@ -306,8 +342,12 @@ def _evaluate_classification(cur, model, val_loader, loss_func, checkpoint_path=
 
     print(f"[Fold {cur}] Final evaluation saved to: {pkl_path}")
     print(f"[Fold {cur}] Final val_cindex={final_val_cindex:.4f}, val_loss={final_val_loss:.4f}")
+    print(
+        f"[Fold {cur}] Inference time={inference_summary['inference_time_seconds']:.4f}s | "
+        f"per_sample={inference_summary['inference_time_per_sample_seconds']:.6f}s"
+    )
 
-    return patient_results, final_val_cindex, final_val_loss
+    return patient_results, final_val_cindex, final_val_loss, inference_summary
 
 
 def train_model(cur, args, loss_func, model, optimizer, lr_scheduler, train_loader):
@@ -337,8 +377,7 @@ def train_model(cur, args, loss_func, model, optimizer, lr_scheduler, train_load
         all_risks = []
 
         for batch in train_loader:
-            if args.modality in {"mlp", "omics", "mlp_per_path", "snn", "gen2vec", "resmlp"}:
-                _, x_batch, y_batch, event_time_batch, censor_batch, _ = batch
+            _, x_batch, y_batch, event_time_batch, censor_batch, _ = batch
 
             # print(f"Batch x shape: {x_batch.shape}, y shape: {y_batch.shape}")
             # print(f"Header of batch x: {x_batch[0][:5]}, batch y: {y_batch[0]}")
@@ -402,16 +441,19 @@ def save_final_fold_summary(fold_metrics, model, genomic_file_name, output_dir=N
     os.makedirs(output_dir, exist_ok=True)
 
     summary_df = pd.DataFrame(fold_metrics)
-    average_row = pd.DataFrame(
-        [{
-            "fold": "average",
-            "train_cindex": float(summary_df["train_cindex"].mean()) if len(summary_df) else 0.0,
-            "train_loss": float(summary_df["train_loss"].mean()) if len(summary_df) else 0.0,
-            "final_val_cindex": float(summary_df["final_val_cindex"].mean()) if len(summary_df) else 0.0,
-            "final_val_loss": float(summary_df["final_val_loss"].mean()) if len(summary_df) else 0.0,
-            "best_model_path": "",
-        }]
-    )
+    average_values = {
+        "fold": "average",
+        "train_cindex": float(summary_df["train_cindex"].mean()) if len(summary_df) else 0.0,
+        "train_loss": float(summary_df["train_loss"].mean()) if len(summary_df) else 0.0,
+        "final_val_cindex": float(summary_df["final_val_cindex"].mean()) if len(summary_df) else 0.0,
+        "final_val_loss": float(summary_df["final_val_loss"].mean()) if len(summary_df) else 0.0,
+        "best_model_path": "",
+    }
+    for col in ("inference_time_seconds", "inference_time_per_sample_seconds"):
+        if col in summary_df.columns:
+            average_values[col] = float(summary_df[col].mean()) if len(summary_df) else 0.0
+
+    average_row = pd.DataFrame([average_values])
     summary_df = pd.concat([summary_df, average_row], ignore_index=True)
 
     summary_dir = os.path.join(output_dir, model, genomic_file_name)
@@ -420,3 +462,41 @@ def save_final_fold_summary(fold_metrics, model, genomic_file_name, output_dir=N
     summary_df.to_csv(summary_path, index=False)
     print(f"Saved final cross-fold summary to: {summary_path}")
     return summary_path
+
+# encoder for WSI patch feature extraction, e.g. resnet50 or conch
+def encoder(model_name, target_img_size=224):
+    from torchvision import models, transforms
+
+    model_name = str(model_name).lower()
+
+    if model_name == "resnet50":
+        try:
+            weights = models.ResNet50_Weights.DEFAULT
+            feature_encoder = models.resnet50(weights=weights)
+        except AttributeError:
+            feature_encoder = models.resnet50(pretrained=True)
+        feature_encoder.fc = nn.Identity()
+
+    elif model_name == "conch":
+        import timm
+
+        feature_encoder = timm.create_model("conch_base", pretrained=True)
+        if hasattr(feature_encoder, "head"):
+            feature_encoder.head = nn.Identity()
+        elif hasattr(feature_encoder, "fc"):
+            feature_encoder.fc = nn.Identity()
+    else:
+        raise ValueError(f"Unsupported model name: {model_name}")
+
+    for param in feature_encoder.parameters():
+        param.requires_grad = False
+    feature_encoder.eval()
+
+    constants = MODELCONSTANT[model_name]
+    img_transforms = transforms.Compose([
+        transforms.Resize((target_img_size, target_img_size)),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=constants["mean"], std=constants["std"]),
+    ])
+
+    return feature_encoder, img_transforms

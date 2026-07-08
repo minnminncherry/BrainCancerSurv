@@ -146,8 +146,8 @@ class SurvivalGenomicDataset:
         return bins.astype("int64").values.ravel()
     
     def __return_splits(self, args, fold_indices):
-        train_split, scalar = self._get_split_from_df(args, split_key="train", fold_indices=fold_indices, scalar=True)
-        test_split, _ = self._get_split_from_df(args, split_key="test",fold_indices=fold_indices, scalar=False)
+        train_split, scalar = self._get_split_from_df( split_key="train", fold_indices=fold_indices, scalar=True)
+        test_split, _ = self._get_split_from_df(split_key="test",fold_indices=fold_indices, scalar=False)
 
         result_dir = _get_result_dir()
         os.makedirs(result_dir, exist_ok=True)
@@ -162,7 +162,7 @@ class SurvivalGenomicDataset:
         return self.__return_splits(args, fold_indices)
     
     
-    def _get_split_from_df(self, args, split_key, fold_indices, scalar=False):
+    def _get_split_from_df(self, split_key, fold_indices, scalar=False):
         if split_key not in {"train", "test"}:
             raise ValueError("split_key must be 'train' or 'test'")
 

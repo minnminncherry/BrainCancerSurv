@@ -1,5 +1,6 @@
 import torch
 from torch.utils.data import DataLoader
+from torch.nn.utils.rnn import pad_sequence
 
 
 def _get_split_loader(args, split_dataset, training=False, testing=False, weighted=False, batch_size=1):
@@ -21,6 +22,9 @@ def _get_split_loader(args, split_dataset, training=False, testing=False, weight
     
     if args.modality in ["mlp", "snn", "gen2vec", "resmlp", "resnet_mlp"]:
         collate_fn = _collate_genomic
+    elif args.modality == "mil":
+        collate_fn = _collate_wsi
+        batch_size = args.batch_size
     else:
         raise NotImplementedError(f"Modality {args.modality} not implemented")
 
@@ -57,3 +61,20 @@ def _collate_genomic(batch):
     c = torch.FloatTensor([item[4] for item in batch])
     clinical_data_list = [item[5] for item in batch]
     return img, omics, label, event_time, c, clinical_data_list
+
+
+def _collate_wsi(batch):
+    """
+    Pad variable-length WSI bags to the longest bag in the batch.
+    """
+    img = pad_sequence(
+        [item[0].float() for item in batch],
+        batch_first=True,
+        padding_value=0.0,
+    )
+    x = img
+    label = torch.LongTensor([item[2] for item in batch])
+    event_time = torch.FloatTensor([item[3] for item in batch])
+    c = torch.FloatTensor([item[4] for item in batch])
+    clinical_data_list = [item[5] for item in batch]
+    return img, x, label, event_time, c, clinical_data_list

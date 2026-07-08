@@ -16,7 +16,7 @@ CUDA_VISIBLE_DEVICES=0 python "$REPO_ROOT/main.py" \
     --seed 42 \
     --genomic_dir "$GENOMIC_DIR" \
     --genomic_file_name "normalized_zscore_gbm.csv" \
-    --modality "snn" \
+    --modality "resmlp" \
     --n_classes 4 \
     --loss_func "cross_entropy" \
     --opt "adam"\
