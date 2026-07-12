@@ -73,8 +73,8 @@ def _collate_wsi(batch):
         padding_value=0.0,
     )
     x = img
-    label = torch.LongTensor([item[2] for item in batch])
-    event_time = torch.FloatTensor([item[3] for item in batch])
-    c = torch.FloatTensor([item[4] for item in batch])
-    clinical_data_list = [item[5] for item in batch]
+    label = torch.LongTensor([item[1] for item in batch])
+    event_time = torch.FloatTensor([item[2] for item in batch])
+    c = torch.FloatTensor([item[3] for item in batch])
+    clinical_data_list = [item[4] for item in batch]
     return img, x, label, event_time, c, clinical_data_list

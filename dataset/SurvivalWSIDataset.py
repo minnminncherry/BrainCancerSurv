@@ -3,9 +3,6 @@ import torch
 from torch.utils.data import Dataset
 import pandas as pd
 import os
-import openslide
-import h5py
-from utils.core_utils import encoder
 
 def _get_result_dir():
     return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "result"))
@@ -13,31 +10,20 @@ def _get_result_dir():
 class SurvivalSplitWSIDataset(Dataset):
     """Dataset for WSI split samples.
 
-    Each item returned follows the same format as the genomic dataset:
-    `(img, x, label, event_time, censorship, clinical_data)`.
-    `x` can be a NumPy array / list of tensors (one-per-sample) or an array/list
-    of file path strings (possibly semi-colon separated) pointing to serialized
-    `.pt` files containing embeddings/tensors.
+    Each item loads a CLAM-style `.pt` bag of patch features and returns:
+    `(wsi_features, label, event_time, censorship, clinical_data)`.
     """
 
-    def __init__(self, x, y, df, feature_dim=512, encoder_model_name="resnet50", encoder_batch_size=32):
+    def __init__(self, x, y, df, feature_dim=512, encoder_model_name="resnet50", encoder_batch_size=32, pt_dir=None):
         print(f"Initializing SurvivalSplitWSIDataset with {len(y)} samples and feature dimension {feature_dim}.")
         self.df = df.reset_index(drop=True).copy()
         self.y = np.asarray(y, dtype=np.int64)
         self.patch_data = list(x)
         self.feature_dim = int(feature_dim)
-        self.encoder_model_name = encoder_model_name
-        self.encoder_batch_size = int(encoder_batch_size)
-        self.feature_encoder = None
-        self.img_transform = None
+        self.pt_dir = pt_dir
 
     def __len__(self):
         return len(self.y)
-
-    def _get_encoder(self):
-        if self.feature_encoder is None or self.img_transform is None:
-            self.feature_encoder, self.img_transform = encoder(self.encoder_model_name)
-        return self.feature_encoder, self.img_transform
 
     def _resize_feature_dim(self, data):
         if data.dim() == 1:
@@ -48,66 +34,48 @@ class SurvivalSplitWSIDataset(Dataset):
         if current_dim > self.feature_dim:
             return data[:, :self.feature_dim]
 
-        pad = torch.zeros(data.shape[0], self.feature_dim - current_dim, dtype=data.dtype)
+        pad = torch.zeros(
+            data.shape[0],
+            self.feature_dim - current_dim,
+            dtype=data.dtype,
+            device=data.device,
+        )
         return torch.cat([data, pad], dim=1)
 
-    def _features_from_h5(self, patch_entry):
-        print(f"Loading features from h5 file: {patch_entry.get('h5_file', 'N/A')} and slide file: {patch_entry.get('slide_file', 'N/A')}")
-        h5_file = patch_entry["h5_file"]
-        slide_file = patch_entry["slide_file"]
-        print(f"Loading features from h5 file: {h5_file}")
+    def _load_pt_features(self, patch_entry):
+        pt_file = patch_entry["pt_file"]
 
-        if not os.path.exists(h5_file):
-            raise FileNotFoundError(f"Patch coordinate h5 file not found: {h5_file}")
-        if not os.path.exists(slide_file):
-            raise FileNotFoundError(f"WSI slide file not found: {slide_file}")
+        if not os.path.exists(pt_file):
+            print(f"WSI feature PT file not found: {pt_file}")
+            return None
 
-        with h5py.File(h5_file, "r") as file:
-            coords = np.asarray(file["coords"][:], dtype=np.int64)
-            patch_level = int(file["coords"].attrs.get("patch_level", 0))
-            patch_size = int(file["coords"].attrs.get("patch_size", patch_entry.get("patch_size", 224)))
-
-        print(f"Extracting features from slide: {slide_file} at level {patch_level} with patch size {patch_size} and lenght coordinatio point: {len(coords)}")
-
-        feature_encoder, img_transform = self._get_encoder()
-        slide_img = openslide.OpenSlide(slide_file)
-        features = []
-        batch = []
-        counter = 0
+        load_device = "cuda" if torch.cuda.is_available() else "cpu"
 
         try:
-            with torch.no_grad():
-                for x, y in coords:
-                    patch_img = slide_img.read_region(
-                        (int(x), int(y)),
-                        patch_level,
-                        (patch_size, patch_size),
-                    ).convert("RGB")
-                    batch.append(img_transform(patch_img))
-                    counter += 1
-                    if counter % 1000 == 0:
-                        print(f"Extracted features for {counter} patches from slide: {slide_file}")
-                    if len(batch) == self.encoder_batch_size:
-                        batch_tensor = torch.stack(batch, dim=0)
-                        features.append(feature_encoder(batch_tensor).cpu())
-                        batch = []
+            print(f"Loading WSI features from PT file: {pt_file} on device: {load_device}")
+            features = torch.load(pt_file, map_location=load_device, weights_only=True)
+        except TypeError:
+            features = torch.load(pt_file, map_location=load_device)
 
-                if batch:
-                    batch_tensor = torch.stack(batch, dim=0)
-                    features.append(feature_encoder(batch_tensor).cpu())
-        finally:
-            slide_img.close()
+        if isinstance(features, dict):
+            features = next(
+                (value for value in features.values() if isinstance(value, torch.Tensor)),
+                None,
+            )
 
-        features = torch.cat(features, dim=0)
+        if features is None:
+            raise ValueError(f"No tensor features found in PT file: {pt_file}")
+
         if features.dim() > 2:
             features = features.reshape(features.shape[0], -1)
-        return self._resize_feature_dim(features.float()), coords.tolist()
+
+        return self._resize_feature_dim(features.float())
 
     def __getitem__(self, idx):
         idx = int(idx)
         if idx < 0 or idx >= len(self.y):
             raise IndexError(f"Index out of range: {idx}")
-
+        
         row = self.df.iloc[idx]
         label = int(self.y[idx])
         event_time = pd.to_numeric(row.get("CDE_survival_time", row.get("survival_months", 0.0)), errors="coerce")
@@ -117,18 +85,23 @@ class SurvivalSplitWSIDataset(Dataset):
         clinical_data = row.to_dict()
 
         patch_entry = self.patch_data[idx]
+
         if isinstance(patch_entry, dict):
             if "features" in patch_entry:
                 wsi_features = patch_entry["features"].float()
-                patch_coords = patch_entry.get("coords", [])
             else:
-                wsi_features, patch_coords = self._features_from_h5(patch_entry)
+                wsi_features = self._load_pt_features(patch_entry)
         else:
             raise TypeError(f"Unsupported WSI patch entry type: {type(patch_entry)}")
 
-        clinical_data["patch_coords"] = patch_coords
-        clinical_data["n_patches"] = int(wsi_features.shape[0])
-        return wsi_features, patch_coords, label, event_time, censorship, clinical_data
+        if wsi_features is None:
+            clinical_data["n_patches"] = 0
+            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            wsi_features = torch.empty((0, self.feature_dim), dtype=torch.float32, device=device)
+        else:
+            clinical_data["n_patches"] = wsi_features.shape[0]
+
+        return wsi_features, label, event_time, censorship, clinical_data
 
 
 class SurvivalWSIDataset():
@@ -146,7 +119,8 @@ class SurvivalWSIDataset():
         n_classes=4,
         h5_dir=None,
         slide_dir=None,
-        wsi_feature_dim=512,
+        pt_dir=None,
+        wsi_feature_dim=2048,
         encoder_model_name="resnet50",
         modality="mil",
         opt="adam",
@@ -162,6 +136,7 @@ class SurvivalWSIDataset():
         self.n_classes = int(n_classes)
         self.h5_dir = h5_dir
         self.slide_dir = slide_dir
+        self.pt_dir = pt_dir
         self.wsi_feature_dim = int(wsi_feature_dim)
         self.encoder_model_name = encoder_model_name
         self.modality = modality
@@ -249,7 +224,7 @@ class SurvivalWSIDataset():
         """
         Return simple patch data and survival labels for train or test.
 
-        x = slide patch coordinates or identifiers
+        x = PT file paths containing pre-computed WSI patch features
         y = survival bin label
         """
         data = self.metadata[self.metadata["n_slides"] > 0].reset_index(drop=True)
@@ -270,7 +245,7 @@ class SurvivalWSIDataset():
 
         y = split_df[bin_col].astype("int64").values
 
-        if self.h5_dir and self.slide_dir:
+        if self.pt_dir:
             patch_data = []
             for _, row in split_df.iterrows():
                 patient_id = row["_PATIENT"]
@@ -279,14 +254,13 @@ class SurvivalWSIDataset():
                     raise FileNotFoundError(f"No WSI slide metadata found for patient: {patient_id}")
 
                 svs_file = sample_slides.iloc[0]["svs_filename"]
-                h5_file = os.path.join(self.h5_dir, os.path.splitext(svs_file)[0] + ".h5")
-                slide_file = os.path.join(self.slide_dir, svs_file)
+                pt_file = os.path.join(self.pt_dir, os.path.splitext(svs_file)[0] + ".pt")
                 patch_data.append({
-                    "h5_file": h5_file,
-                    "slide_file": slide_file,
+                    "pt_file": pt_file,
                 })
+                print()
         else:
-            raise ValueError("SurvivalWSIDataset requires both h5_dir and slide_dir for MIL training.")
+            raise ValueError("SurvivalWSIDataset requires pt_dir for MIL training.")
 
         return SurvivalSplitWSIDataset(
             patch_data,
@@ -294,6 +268,7 @@ class SurvivalWSIDataset():
             split_df,
             feature_dim=self.wsi_feature_dim,
             encoder_model_name=self.encoder_model_name,
+            pt_dir=self.pt_dir,
         )
 
     def return_splits(self, args, fold_indices):

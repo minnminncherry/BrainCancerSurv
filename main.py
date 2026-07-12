@@ -76,6 +76,7 @@ if __name__ == "__main__":
         "slide_file_name": args.slide_file_name,
         "slide_dir": args.slide_dir,
         "h5_dir": args.h5_dir,
+        "pt_dir": args.pt_dir,
         "wsi_feature_dim": args.wsi_feature_dim,
         "encoder_model_name": args.encoder_model_name,
         "seed": args.seed,

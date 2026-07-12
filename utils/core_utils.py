@@ -5,6 +5,7 @@ from model.model_SNN_gene import SNNGenomics
 from model.model_Gen2vec_gene import Gen2VecGenomics
 from model.model_resnet_mlp_gene import ResMLPGenomics
 from model.model_MIL_wsi import MILWSI
+from model.model_transmil_wsi import TRANSMILWSI
 import os
 import time
 import pickle
@@ -13,6 +14,7 @@ import torch.optim as optim
 from utils.constants import MODELCONSTANT
 from .general_utils import _get_split_loader 
 from transformers import get_linear_schedule_with_warmup
+from torchvision import models, transforms
 
 def _get_result_dir():
     return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "result"))
@@ -189,6 +191,15 @@ def _init_model(args):
             "dropout": dropout,
         }
         model = MILWSI(**model_dict)
+    elif args.modality == "transmil":
+        dropout = _get_dropout(0.2)
+        model_dict = {
+            "input_dim": int(getattr(args, "wsi_feature_dim", 512)),
+            "n_classes": int(args.n_classes),
+            "hidden_dim": 256,
+            "dropout": dropout,
+        }
+        model = TRANSMILWSI(**model_dict)
     else:
         raise NotImplementedError(f"Modality {args.modality} not implemented")
     
@@ -465,22 +476,23 @@ def save_final_fold_summary(fold_metrics, model, genomic_file_name, output_dir=N
 
 # encoder for WSI patch feature extraction, e.g. resnet50 or conch
 def encoder(model_name, target_img_size=224):
-    from torchvision import models, transforms
 
     model_name = str(model_name).lower()
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     if model_name == "resnet50":
         try:
             weights = models.ResNet50_Weights.DEFAULT
-            feature_encoder = models.resnet50(weights=weights)
+            feature_encoder = models.resnet50(weights=weights).to(device)
         except AttributeError:
-            feature_encoder = models.resnet50(pretrained=True)
+            feature_encoder = models.resnet50(pretrained=True).to(device)
         feature_encoder.fc = nn.Identity()
 
     elif model_name == "conch":
         import timm
 
         feature_encoder = timm.create_model("conch_base", pretrained=True)
+        feature_encoder = feature_encoder.to(device)
         if hasattr(feature_encoder, "head"):
             feature_encoder.head = nn.Identity()
         elif hasattr(feature_encoder, "fc"):

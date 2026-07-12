@@ -4,6 +4,7 @@ import pandas as pd
 from data_normalization import DataNormalization_genomic_data
 from clean_genomic_data import GenomicDataCleaner
 from WSI_folder_cleaning import WSIDataCleaner
+from mri_folder_cleaning import MRIDataCleaner
 import os
 import yaml
 import shutil
@@ -17,6 +18,7 @@ def main(args1, args2=None, args3=None):
     yaml_file_path = os.path.join(project_root, "config.yaml")
     with open(yaml_file_path, 'r') as file:
         data = yaml.safe_load(file)
+
     if (args2 == 'gbm'):
         input_dir = data['gbm_src_file_paths']['genomic_data_dir']
         output_dir = data['gbm_clean_file_paths']['genomic_data_dir']
@@ -29,6 +31,8 @@ def main(args1, args2=None, args3=None):
         wsi_metadata_file_path = os.path.abspath(os.path.join(script_dir, data['WSI_file_path']['gbm_wsi_metadata_file_path']))
         wsi_final_file_path = os.path.abspath(os.path.join(script_dir, data['WSI_file_path']['gbm_wsi_final_file_path']))
         wsi_new_file_path = os.path.abspath(os.path.join(script_dir, data['WSI_file_path']['gbm_wsi_new_file_path']))
+        mri_input_dir = os.path.abspath(os.path.join(script_dir, data['MRI_file_path']['gbm_mri_input_file_path']))
+
     elif (args2 == 'lgg'):
         input_dir = data['lgg_src_file_paths']['genomic_data_dir']
         output_dir = data['lgg_clean_file_paths']['genomic_data_dir']
@@ -47,10 +51,12 @@ def main(args1, args2=None, args3=None):
     
     gen_cls = GenomicDataCleaner(input_dir, output_dir)
     wsi_cls = WSIDataCleaner(wsi_final_file_path)
+    mri_cls = MRIDataCleaner(mri_input_dir)
 
     if args1 != 'TEXT_TO_CSV':
         gen_cls.connect_db(db_name)
         wsi_cls.connect_db(db_name)
+        mri_cls.connect_db(db_name)
 
     # Connect to database
     if(args1 == 'INSERT_METADATA_JSON_DATA'):
@@ -141,20 +147,6 @@ def main(args1, args2=None, args3=None):
             gen_cls.change_plain_text_file_to_csv(text_file_path, csv_file_path)
         else:
             print("Invalid cancer type provided for TEXT_TO_CSV. Please specify 'gbm' or 'lgg'.")
-        
-    # elif(args1 == 'FORMAT_CHANGE_SVS_TO_PT'):
-    #     if args2 == 'gbm':
-    #         wsi_cls.WSI_format_change_h5(
-    #             512,
-    #             wsi_output_dir,
-    #             wsi_input_dir
-    #         )
-    #     elif args2 == 'lgg':
-    #         wsi_cls.WSI_format_change_h5(
-    #             512,
-    #             wsi_output_dir,
-    #             wsi_input_dir
-    #         )
 
     elif(args1 == 'COPY_WSI_FILES_ONE_FOLDER'):
         if args2 == 'gbm':
@@ -177,6 +169,10 @@ def main(args1, args2=None, args3=None):
     elif(args1 == 'INSERT_H5_FILE_NAMES_TO_DB'):
         if wsi_cls.conn:
             wsi_cls.insert_h5_filename_DB(wsi_h5_dir, "raw_wsi_h5_filenames")
+    
+    elif(args1 == 'INSERT_MRI_FILE_NAMES_TO_DB'):
+        if mri_cls.conn:
+            mri_cls.load_filename_to_db(mri_input_dir, "raw_patient_info_MRI")
 
     else:
         print("Invalid arguments provided")
