@@ -16,6 +16,11 @@ class DataNormalization_genomic_data:
             raise ValueError("No numeric columns found to normalize.")
 
         method = method.lower().strip()
+        # add the code for the log2 transformation here
+        normalized = round(np.log2(numeric_df + 1), 3)  # Add 1 to avoid log(0)
+        params = {"method": method, "eps": eps}
+        numeric_df = normalized  # Update numeric_df to the log-transformed values before further normalization
+        
         if method == "zscore":
             mean = numeric_df.mean(axis=0)
             std = numeric_df.std(axis=0, ddof=0).replace(0, np.nan).fillna(1.0)
@@ -30,6 +35,7 @@ class DataNormalization_genomic_data:
             normalized = round((numeric_df - min_v) / (denom + eps), 3)
             params = {"method": method, "min": min_v, "max": max_v, "eps": eps}
             output_file_name = f"{output_path}/normalized_{method}_{self.cancer_type}.csv"
+        
         else:
             raise ValueError(f"Unsupported normalization method: {method}. Use 'zscore' or 'minmax'.")
 

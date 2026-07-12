@@ -1,3 +1,4 @@
+import csv
 import json
 import os
 import pymysql
@@ -13,14 +14,14 @@ class GenomicDataCleaner:
         self.output_dir = output_dir
         self.conn = None
     
-    def connect_db(self):
+    def connect_db(self, database_name):
         """Establish database connection"""
         try:
             self.conn = pymysql.connect(
                 host='localhost',
                 user='mmc',
                 password='root',
-                db='tcga_gbm'
+                db=database_name
             )
             print("Database connection established")
         except Exception as e:
@@ -128,15 +129,14 @@ class GenomicDataCleaner:
             print(f"Error inserting TSV data into database: {e}")
             self.conn.rollback()
         
-    def generate_clean_genomic_data(self, out_file_path):
+    def generate_clean_genomic_data(self, out_file_path, unstranded_column='tpm_unstranded'):
         """Generate cleaned genomic data and save to output directory"""
         # This function can be implemented to read from the database, perform any necessary cleaning or transformation, and save the cleaned data to the output directory.
         date = pd.Timestamp.now().strftime("%Y-%m-%d")
-        sql = '''
-                SELECT 
+        sql = ''' SELECT 
             a.gene_name, 
             SUBSTRING_INDEX(c.entity_submitter_id, '-', 3) AS patient_id, 
-            SUM(a.fpkm_uq_unstranded) AS fpkm_value 
+            SUM(a.%s) AS %s 
         FROM raw_genomic_data a 
         INNER JOIN raw_file_name_genomic_data b 
             ON a.file_name = b.file_name 
@@ -146,17 +146,19 @@ class GenomicDataCleaner:
             a.gene_id IS NOT NULL
             AND a.gene_name IS NOT NULL
             AND a.gene_name != ''
-            AND a.gene_id NOT LIKE '%PAR%'
+            AND a.gene_id NOT LIKE '%%PAR%%'
         GROUP BY 
             a.gene_name, patient_id 
         ORDER BY 
-            a.gene_name, patient_id;'''
+            a.gene_name, patient_id; ''' % (unstranded_column, unstranded_column)
+
+        print(sql)
 
         try:
             with self.conn.cursor() as cursor:
                 cursor.execute(sql)
                 result = cursor.fetchall()
-                df_cleaned = pd.DataFrame(result, columns=['gene_name', 'patient_id', 'fpkm_value'])
+                df_cleaned = pd.DataFrame(result, columns=['gene_name', 'patient_id', unstranded_column])
                 output_csv_path = os.path.join(out_file_path, f"cleaned_genomic_data_{date}.csv")
                 df_cleaned.to_csv(output_csv_path, index=False)
                 print(f"Cleaned genomic data saved to {output_csv_path}")
@@ -164,9 +166,9 @@ class GenomicDataCleaner:
             print(f"Error inserting TSV data into database: {e}")
             self.conn.rollback()
 
-    def transform_genomic_data(self, outfile_path, hallmarks_data_path, output_file_path,fill_type='mean', cancer_type='gbm'):
+    def transform_genomic_data(self, outfile_path, hallmarks_data_path, output_file_path, unstranded_column, cancer_type='gbm'):
         genomic_data = pd.read_csv(outfile_path)
-        genomic_data.rename(columns={0: 'gene_name', 1:'patient_id', 2:'fpkm_value'}, inplace=True)
+        genomic_data.rename(columns={0: 'gene_name', 1:'patient_id', 2:unstranded_column}, inplace=True)
         hallmark_df = pd.read_csv(hallmarks_data_path)
         hallmark_gene_df = hallmark_df.iloc[:, [0]]
         
@@ -180,10 +182,46 @@ class GenomicDataCleaner:
         df_pivot = df_filter.pivot_table(
             index="patient_id",
             columns="gene_name",
-            values="fpkm_value",
+            values=unstranded_column,
             aggfunc="sum",
             fill_value=0,
         )
 
         df_pivot.to_csv(output_file_path+f"/{cancer_type}.csv", index=True)
         print(f"Transformed genomic data saved to {output_file_path}/{cancer_type}.csv")
+    
+    def insert_file_records(self, file_records):
+        """
+        Insert a list of (file_name, file_path) tuples into the specified table.
+        """
+        with self.conn.cursor() as cursor:
+            truncate_qry = "TRUNCATE TABLE raw_file_name_genomic_data;"
+            cursor.execute(truncate_qry)
+            sql = f"INSERT INTO raw_file_name_genomic_data (file_name, file_path) VALUES (%s, %s)"
+            cursor.executemany(sql, file_records)
+        self.conn.commit()
+
+    def collect_file_records(self, base_path, extension):
+        records = []
+        for root, dirs, files in os.walk(base_path):
+            for file in files:
+                if file.endswith(extension):
+                    records.append((file, os.path.join(root, file)))
+        return records
+    
+    @staticmethod
+    def change_plain_text_file_to_csv(text_file_path, csv_file_path, delimiter='\t'):
+        if not os.path.exists(text_file_path):
+            raise FileNotFoundError(f"Input text file not found: {text_file_path}")
+
+        os.makedirs(os.path.dirname(csv_file_path), exist_ok=True)
+
+        with open(text_file_path, 'r') as txt_file:
+            reader = csv.reader(txt_file, delimiter=delimiter)
+            rows = list(reader)
+
+        with open(csv_file_path, 'w', newline='') as csv_file:
+            writer = csv.writer(csv_file)
+            writer.writerows(rows)
+
+        print(f"Converted '{text_file_path}' to '{csv_file_path}' using delimiter '{delimiter}'")

@@ -2,6 +2,37 @@ import os
 import pandas as pd
 import numpy as np
 import torch
+from torch.utils.data import Dataset
+
+
+def _get_result_dir():
+    return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "result"))
+
+
+class SurvivalGenomicSplitDataset(Dataset):
+    def __init__(self, x, y, df):
+        self.x = np.asarray(x, dtype=np.float32)
+        self.y = np.asarray(y, dtype=np.int64)
+        self.df = df.reset_index(drop=True).copy()
+
+    def __len__(self):
+        return len(self.y)
+
+    def __getitem__(self, idx):
+        idx = int(idx)
+        row = self.df.iloc[idx]
+        omics_tensor = torch.from_numpy(self.x[idx])
+        label = int(self.y[idx])
+        event_time = float(pd.to_numeric(row.get("CDE_survival_time", row.get("survival_months", 0.0)), errors="coerce"))
+
+        c_col = next(
+            (c_name for c_name in SurvivalGenomicDataset.CENSOR_CANDIDATES if c_name in self.df.columns),
+            None,
+        )
+        c = pd.to_numeric(row[c_col], errors="coerce") if c_col is not None else 0.0
+        c = 0.0 if pd.isna(c) else float(c)
+        clinical_data = row.to_dict()
+        return (torch.zeros((1, 1), dtype=torch.float32), omics_tensor, label, event_time, c, clinical_data)
 
 class SurvivalGenomicDataset:
     ID_CANDIDATES = ("patient_id", "_PATIENT", "sampleID", "bcr_patient_barcode")
@@ -47,7 +78,6 @@ class SurvivalGenomicDataset:
         if not os.path.exists(self.genomic_data):
             raise FileNotFoundError(f"Genomic file not found: {self.genomic_data}")
 
-        # Cache genomic table once; __getitem__ is called repeatedly.
         self.genomic_df = pd.read_csv(self.genomic_data)
         self.genomic_id_col = next(
             (c for c in self.ID_CANDIDATES if c in self.genomic_df.columns),
@@ -62,7 +92,6 @@ class SurvivalGenomicDataset:
         if self.label_col not in self.label_data.columns:
             raise ValueError(f"Label column '{self.label_col}' not found in label file.")
 
-        # Simple single path: always use `label_col` and discretize into `n_classes`.
         label_values = pd.to_numeric(self.label_data[self.label_col], errors="coerce")
         keep_mask = label_values.notna()
         if (~keep_mask).any():
@@ -74,44 +103,66 @@ class SurvivalGenomicDataset:
         self.metadata = self.label_data.drop(columns=[self.label_col]).copy()
         self.metadata[self.label_col] = label_values.values
         self.metadata[f"{self.label_col}_bin"] = class_bins
+        self.metadata["censorship"] = self.__build_censorship(self.metadata)
+
+    def __build_censorship(self, metadata):
+        """
+        Return 1.0 for censored/living patients and 0.0 for observed death events.
+        """
+        status_col = next((c for c in ("CDE_vital_status", "vital_status") if c in metadata.columns), None)
+        if status_col is None:
+            return pd.Series(np.zeros(len(metadata), dtype=np.float32), index=metadata.index)
+
+        status = metadata[status_col].astype(str).str.strip().str.upper()
+        censorship = pd.Series(np.nan, index=metadata.index, dtype="float32")
+        censorship[status.isin({"LIVING", "ALIVE"})] = 1
+        censorship[status.isin({"DECEASED", "DEAD"})] = 0
+
+        if "days_to_death" in metadata.columns:
+            has_death_day = pd.to_numeric(metadata["days_to_death"], errors="coerce").notna()
+            censorship[has_death_day] = 0
+        if "days_to_last_followup" in metadata.columns:
+            has_followup = pd.to_numeric(metadata["days_to_last_followup"], errors="coerce").notna()
+            censorship[censorship.isna() & has_followup] = 1
+
+        return censorship.fillna(0.0)
 
     def __discretize_suvival_month(self, survival_months):
         n_quantiles = max(2, int(self.n_classes))
-        # qcut function = Split data so each group has the SAME number of samples
-        # Bin 0: [10, 20]     -> 10-20 months
-        # Bin 1: [30, 40]    -> 30-40 months
-        # Bin 2: [50, 60]    -> 50-60 months        
-        # Bin 3: [70, 80]    -> 70-80 months
-        bins = pd.qcut(survival_months, q=n_quantiles, labels=False, duplicates="drop")
+        bins, bin_edges = pd.qcut(
+            survival_months,
+            q=n_quantiles,
+            labels=False,
+            duplicates="drop",
+            retbins=True,
+        )
+        self.survival_bin_edges = np.asarray(bin_edges, dtype=np.float32)
         if getattr(bins, "isna", None) is not None and bins.isna().any():
             bad_count = int(bins.isna().sum())
             raise ValueError(
                 f"Discretization produced {bad_count} NaN bin(s). "
                 "This usually means there are too few unique values for the requested n_classes."
             )
-        return bins.astype("int64").values
+        return bins.astype("int64").values.ravel()
     
     def __return_splits(self, args, fold_indices):
-        # This function can be implemented to return the appropriate splits of the dataset based on the provided indices.
-        # For example, it could return training and testing datasets for cross-validation.
-        train_split, scalar = self._get_split_from_df(args, split_key="train", fold_indices=fold_indices, scalar=True)
-        test_split, _ = self._get_split_from_df(args, split_key="test",fold_indices=fold_indices, scalar=False)
+        train_split, scalar = self._get_split_from_df( split_key="train", fold_indices=fold_indices, scalar=True)
+        test_split, _ = self._get_split_from_df(split_key="test",fold_indices=fold_indices, scalar=False)
 
-        # Save merged split data under project `result/` folder.
-        result_dir = os.path.join(os.getcwd(), "../result")
+        result_dir = _get_result_dir()
         os.makedirs(result_dir, exist_ok=True)
-        train_split["df"].to_csv(os.path.join(result_dir, "train_merged_split.csv"), index=False)
-        test_split["df"].to_csv(os.path.join(result_dir, "test_merged_split.csv"), index=False)
+        train_split.df.to_csv(os.path.join(result_dir, "train_merged_split.csv"), index=False)
+        test_split.df.to_csv(os.path.join(result_dir, "test_merged_split.csv"), index=False)
+        print('Done!')
+        print("Training on {} samples".format(len(train_split)))
+        print("Testing on {} samples".format(len(test_split)))
         return train_split, test_split, scalar
 
-    # Public API (main.py calls this name).
     def return_splits(self, args, fold_indices):
         return self.__return_splits(args, fold_indices)
     
     
-    def _get_split_from_df(self, args, split_key, fold_indices, scalar=False):
-        # This function can be implemented to extract the specified split (train/test) from the dataset based on the provided indices.
-        # It can also handle any necessary preprocessing or scaling of the data if scalar=True.
+    def _get_split_from_df(self, split_key, fold_indices, scalar=False):
         if split_key not in {"train", "test"}:
             raise ValueError("split_key must be 'train' or 'test'")
 
@@ -134,7 +185,6 @@ class SurvivalGenomicDataset:
         label_df["__row_index"] = np.arange(len(label_df), dtype=np.int64)
 
         label_id_col = None
-        # Prefer `_PATIENT` because our example label CSV uses it and genomic uses `patient_id`.
         for candidate in ("patient_id", "_PATIENT", "sampleID", "bcr_patient_barcode"):
             if candidate in label_df.columns:
                 label_id_col = candidate
@@ -145,19 +195,19 @@ class SurvivalGenomicDataset:
                 "patient_id, _PATIENT, sampleID, bcr_patient_barcode."
             )
 
-        # Keep only essential columns before merge to avoid carrying unnecessary metadata.
         feature_cols = [c for c in genomic_df.columns if c != genomic_id_col]
         if not feature_cols:
             raise ValueError("No feature columns found in genomic CSV (only ID column present).")
         genomic_min = genomic_df[[genomic_id_col] + feature_cols].copy()
 
-        # Minimal label-side fields used for split/target.
         label_keep_cols = [label_id_col, "__label", "__row_index"]
         if self.label_col in label_df.columns and self.label_col not in label_keep_cols:
             label_keep_cols.append(self.label_col)
         label_bin_col = f"{self.label_col}_bin"
         if label_bin_col in label_df.columns and label_bin_col not in label_keep_cols:
             label_keep_cols.append(label_bin_col)
+        if "censorship" in label_df.columns and "censorship" not in label_keep_cols:
+            label_keep_cols.append("censorship")
         label_min = label_df[label_keep_cols].copy()
 
         merged = label_min.merge(
@@ -172,12 +222,10 @@ class SurvivalGenomicDataset:
             raise ValueError(
                 f"No rows matched between label '{label_id_col}' and genomic '{genomic_id_col}'."
             )
-        # save the merged dataframe to a csv file in the result folder
-        result_dir = os.path.join(os.getcwd(), "../result")
+        result_dir = _get_result_dir()
         os.makedirs(result_dir, exist_ok=True)
         pd.DataFrame(merged).to_csv(os.path.join(result_dir, "merge_df.csv"), index=False)
 
-        # Drop duplicated right-side ID after merge if different names were used.
         if genomic_id_col != label_id_col and genomic_id_col in merged.columns:
             merged = merged.drop(columns=[genomic_id_col])
 
@@ -196,7 +244,6 @@ class SurvivalGenomicDataset:
 
         fitted_scaler = None
         if scalar:
-            # normalization of the data
             mean = x.mean(axis=0, dtype=np.float64)
             std = x.std(axis=0, dtype=np.float64)
             std[std == 0] = 1.0
@@ -209,7 +256,7 @@ class SurvivalGenomicDataset:
                 raise ValueError("Feature columns do not match fitted scaler feature columns.")
             x = (x - scaler_to_use["mean"].astype(np.float32)) / scaler_to_use["std"].astype(np.float32)
 
-        return {"x": x, "y": y, "df": split_df}, fitted_scaler
+        return SurvivalGenomicSplitDataset(x=x, y=y, df=split_df), fitted_scaler
     
     def data_return_item(self, idx):
         idx = int(idx)
@@ -244,3 +291,11 @@ class SurvivalGenomicDataset:
 
     def __getitem__(self, idx):
         return self.data_return_item(idx)
+
+    def __len__(self):
+        return len(self.metadata)
+    
+    def _load_wsi_embs_from_path(self, wsi_emb_path):
+        if not os.path.exists(wsi_emb_path):
+            raise FileNotFoundError(f"WSI embedding file not found: {wsi_emb_path}")
+        return torch.load(wsi_emb_path)
