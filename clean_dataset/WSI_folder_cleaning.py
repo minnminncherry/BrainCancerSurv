@@ -94,18 +94,18 @@ class WSIDataCleaner:
 
     def generate_wsi_metadata_csv(self, output_csv_path):
         """Generate a CSV file from metadata records"""
-        sql = ''' select b.file_name as svs_filename, c.h5_filename, coalesce(case_submitter_id, SUBSTRING_INDEX(entity_submitter_id, '-', 3)) as patient_id,
-                CASE WHEN entity_submitter_id like '%11A%' then 'normal'
-                else 'tumor' end as status
-                from map_wsi_filepath a 
-                left join wsi_metadata_json_data b on a.svs_filename = b.file_name
-                inner join raw_wsi_h5_filenames c on SUBSTRING_INDEX(c.h5_filename, '.h5', 1) = SUBSTRING_INDEX(b.file_name, '.svs', 1)
-                where b.experimental_strategy like '%Diagnostic Slide%' '''
+        sql = ''' select b.file_name as svs_filename, c.h5_filename, a.pt_filename, coalesce(case_submitter_id, SUBSTRING_INDEX(entity_submitter_id, '-', 3)) as patient_id, 
+            CASE WHEN entity_submitter_id like '%11A%' then 'normal'
+            else 'tumor' end as status
+            from map_wsi_filepath a 
+            left join wsi_metadata_json_data b on a.svs_filename = b.file_name
+            inner join raw_wsi_h5_filenames c on SUBSTRING_INDEX(c.h5_filename, '.h5', 1) = SUBSTRING_INDEX(b.file_name, '.svs', 1)
+                            '''
         try:
             with self.conn.cursor() as cursor:
                 cursor.execute(sql)
                 results = cursor.fetchall()
-                df = pd.DataFrame(results, columns=['svs_filename', 'h5_filename', 'patient_id', 'status'])
+                df = pd.DataFrame(results, columns=['svs_filename', 'h5_filename', 'pt_filename', 'patient_id', 'status'])
                 df.to_csv(os.path.join(output_csv_path), index=False)
                 print(f"Generated WSI metadata CSV at {output_csv_path}")
         except Exception as e:
@@ -160,3 +160,41 @@ class WSIDataCleaner:
         except Exception as e:
             print(f"Error inserting h5 filenames into database: {e}")
             self.conn.rollback()
+        
+    def insert_svs_filename_DB(self, svs_dir, pt_dir, table_name):
+        """Insert svs filenames into database table"""
+        if not self.conn:
+            print("No database connection. Call connect_db() first.")
+            return
+        
+        try:
+            with self.conn.cursor() as cursor:
+                # Truncate table first
+                truncate_qry = f"TRUNCATE TABLE {table_name};"
+                cursor.execute(truncate_qry)
+                count = 0
+                # Insert data
+                sql = f"INSERT INTO {table_name} (svs_filename, svs_filepath, pt_filename, pt_filepath) VALUES (%s, %s, %s, %s)"
+
+                for f in os.listdir(svs_dir):
+                    count+=1
+                    if f.endswith('.svs'):
+                        svs_filepath = os.path.join(svs_dir, f)
+                        f_suf = f.removesuffix(".svs")
+                        print(f"Processing {f} with suffix {f_suf}")
+                        pt_filename = None
+                        for f_pt in os.listdir(pt_dir):
+                            if f_pt.startswith(f_suf):
+                                pt_filename = f_pt
+                                break
+                        if pt_filename:
+                            pt_filepath = os.path.join(pt_dir, pt_filename)
+                        pt_filepath = os.path.join(pt_dir, pt_filename) if pt_filename else None
+                        cursor.execute(sql, (f, svs_filepath, pt_filename, pt_filepath))
+                
+        except Exception as e:
+            print(f"Error inserting svs filenames into database: {e}")
+            self.conn.rollback()
+
+        self.conn.commit()
+        print("Total count : ",count)

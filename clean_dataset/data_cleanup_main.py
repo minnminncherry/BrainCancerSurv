@@ -32,7 +32,8 @@ def main(args1, args2=None, args3=None):
         wsi_final_file_path = os.path.abspath(os.path.join(script_dir, data['WSI_file_path']['gbm_wsi_final_file_path']))
         wsi_new_file_path = os.path.abspath(os.path.join(script_dir, data['WSI_file_path']['gbm_wsi_new_file_path']))
         mri_input_dir = os.path.abspath(os.path.join(script_dir, data['MRI_file_path']['gbm_mri_input_file_path']))
-
+        wsi_pt_dir = os.path.abspath(os.path.join(script_dir, data['WSI_file_path']['gbm_wsi_pt_file_path']))
+    
     elif (args2 == 'lgg'):
         input_dir = data['lgg_src_file_paths']['genomic_data_dir']
         output_dir = data['lgg_clean_file_paths']['genomic_data_dir']
@@ -45,6 +46,8 @@ def main(args1, args2=None, args3=None):
         wsi_metadata_file_path = os.path.abspath(os.path.join(script_dir, data['WSI_file_path']['lgg_wsi_metadata_file_path']))
         wsi_final_file_path = os.path.abspath(os.path.join(script_dir, data['WSI_file_path']['lgg_wsi_final_file_path']))
         wsi_new_file_path = os.path.abspath(os.path.join(script_dir, data['WSI_file_path']['lgg_wsi_new_file_path']))
+        mri_input_dir = os.path.abspath(os.path.join(script_dir, data['MRI_file_path']['lgg_mri_input_file_path']))
+        wsi_pt_dir = os.path.abspath(os.path.join(script_dir, data['WSI_file_path']['lgg_wsi_pt_file_path']))
     else:
         print("Invalid cancer type provided. Please specify 'gbm' or 'lgg'.")
         return
@@ -158,6 +161,10 @@ def main(args1, args2=None, args3=None):
         if wsi_cls.conn:
             json_data = wsi_cls.get_wsi_metadata_json_data(wsi_metadata_file_path)
             wsi_cls.insert_wsi_json_data_to_db(json_data, "wsi_metadata_json_data")
+
+    elif(args1 == 'INSERT_WSI_PT_FILE_NAMES_TO_DB'):
+        if wsi_cls.conn:
+            wsi_cls.insert_svs_filename_DB(wsi_new_file_path, wsi_pt_dir, "map_wsi_filepath")
 
     elif(args1 == 'GENERATE_WSI_METADATA_CSV'):
         if wsi_cls.conn:

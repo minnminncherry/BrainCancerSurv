@@ -26,7 +26,6 @@ def _process_args():
     parser.add_argument("--num_clusters", type=int, default=8, help="Number of clusters for the kmeans genomic model.")
     parser.add_argument("--num_workers", "--worker", dest="num_workers", type=int, default=0, help="Parallel data loading workers.")
     parser.add_argument("--slide_file_name", type=str, help="CSV file containing WSI metadata.")
-    parser.add_argument("--encoder_model_name", type=str, default="resnet50", help="Encoder model name for WSI feature extraction.")
     parser.add_argument("--slide_dir", type=str, help="mapping folder for svs,pt and patient info wsi image")
     parser.add_argument("--h5_dir", type=str, help="Optional H5 directory with patch coordinates.")
     parser.add_argument("--pt_dir", type=str, help="Directory containing WSI feature PT files.")

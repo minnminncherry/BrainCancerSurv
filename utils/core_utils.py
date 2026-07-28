@@ -6,6 +6,7 @@ from model.model_Gen2vec_gene import Gen2VecGenomics
 from model.model_resnet_mlp_gene import ResMLPGenomics
 from model.model_MIL_wsi import MILWSI
 from model.model_transmil_wsi import TRANSMILWSI
+from model.late_fusion import MultimodalLateFusion
 import os
 import time
 import pickle
@@ -14,7 +15,9 @@ import torch.optim as optim
 from utils.constants import MODELCONSTANT
 from .general_utils import _get_split_loader 
 from transformers import get_linear_schedule_with_warmup
+from utils.process_args import _process_args
 from torchvision import models, transforms
+
 
 def _get_result_dir():
     return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "result"))
@@ -45,6 +48,7 @@ def _train_val(args, train_dataset, test_dataset, cur):
         train_loader
     )
     eval_results, final_val_cindex, final_val_loss, inference_summary = _evaluate_classification(
+        args,
         cur,
         model,
         val_loader,
@@ -90,7 +94,7 @@ def risk_scores(logits):
     class_ids = torch.arange(logits.size(1), device=logits.device, dtype=probs.dtype)
     return -torch.sum(probs * class_ids, dim=1)
 
-def calculate_inference_time(model, x_batch, device):
+def calculate_inference_time(model, device, *inputs):
     """
     Run one model forward pass and return logits plus elapsed inference time.
     CUDA is synchronized so GPU timing is measured correctly.
@@ -98,10 +102,27 @@ def calculate_inference_time(model, x_batch, device):
     if device.type == "cuda":
         torch.cuda.synchronize(device)
     start_time = time.perf_counter()
-    logits = model(x_batch)
+    logits = model(*inputs)
     if device.type == "cuda":
         torch.cuda.synchronize(device)
     return logits, time.perf_counter() - start_time
+
+
+def _parse_batch(batch):
+    """Parse a batch returned by the dataset collate function.
+
+    Supports unimodal batches of the form
+    (input, label, event_time, censorship, clinical_data)
+    and multimodal batches of the form
+    (wsi_input, genomic_input, label, event_time, censorship, clinical_data).
+    """
+    if len(batch) == 5:
+        input_data, y_batch, event_time_batch, censor_batch, clinical_data_list = batch
+        return input_data, None, y_batch, event_time_batch, censor_batch, clinical_data_list
+    if len(batch) == 6:
+        wsi_batch, omics_batch, y_batch, event_time_batch, censor_batch, clinical_data_list = batch
+        return omics_batch, wsi_batch, y_batch, event_time_batch, censor_batch, clinical_data_list
+    raise ValueError(f"Unsupported batch format with {len(batch)} elements.")
 
 
 def concordance_index(event_times, censorships, risks):
@@ -185,14 +206,14 @@ def _init_model(args):
     elif args.modality == "mil":
         dropout = _get_dropout(0.2)
         model_dict = {
-            "input_dim": int(getattr(args, "wsi_feature_dim", 512)),
+            "input_dim": int(getattr(args, "wsi_feature_dim", 1024)),
             "n_classes": int(args.n_classes),
             "hidden_dim": 256,
             "dropout": dropout,
         }
         model = MILWSI(**model_dict)
     elif args.modality == "transmil":
-        dropout = _get_dropout(0.2)
+        dropout = _get_dropout(0.5)
         model_dict = {
             "input_dim": int(getattr(args, "wsi_feature_dim", 512)),
             "n_classes": int(args.n_classes),
@@ -200,6 +221,18 @@ def _init_model(args):
             "dropout": dropout,
         }
         model = TRANSMILWSI(**model_dict)
+        
+    elif args.modality == "multimodal_late_fusion":
+        dropout = _get_dropout(0.2)
+        hidden_dim = int(getattr(args, "resmlp_hidden_dim", 256))
+        model_dict = {
+            "genomic_input_dim": genomic_input_dim,
+            "wsi_input_dim": int(getattr(args, "wsi_feature_dim", 1024)),
+            "n_classes": int(args.n_classes),
+            "hidden_dim": hidden_dim,
+            "dropout": dropout,
+        }
+        model = MultimodalLateFusion(**model_dict)
     else:
         raise NotImplementedError(f"Modality {args.modality} not implemented")
     
@@ -238,12 +271,12 @@ def _get_lr_scheduler(args, optimizer, dataloader):
 
 def _extract_case_id(clinical_data, default_id):
     if isinstance(clinical_data, dict):
-        for key in ("patient_id", "_PATIENT", "sampleID", "bcr_patient_barcode"):
+        for key in ("patient_id", "_PATIENT", "bcr_patient_barcode"):
             if key in clinical_data and pd.notna(clinical_data[key]):
                 return str(clinical_data[key])
     return f"sample_{default_id}"
 
-def _evaluate_classification(cur, model, val_loader, loss_func, checkpoint_path=None):
+def _evaluate_classification(args,cur, model, val_loader, loss_func, checkpoint_path=None):
     """
     Run one final evaluation pass for a fold, save per-sample predictions,
     and return the final validation metrics.
@@ -268,15 +301,20 @@ def _evaluate_classification(cur, model, val_loader, loss_func, checkpoint_path=
     output_rows = []
     with torch.no_grad():
         for batch in val_loader:
-            _, x_batch, y_batch, event_time_batch, censor_batch, clinical_data_list = batch
+            x_batch, aux_batch, y_batch, event_time_batch, censor_batch, clinical_data_list = _parse_batch(batch)
 
             x_batch = x_batch.to(device)
+            if aux_batch is not None:
+                aux_batch = aux_batch.to(device)
             y_batch = y_batch.to(device)
             event_time_batch = event_time_batch.to(device)
             censor_batch = censor_batch.to(device)
 
             batch_size = y_batch.size(0)
-            logits, batch_inference_time = calculate_inference_time(model, x_batch, device)
+            if aux_batch is None:
+                logits, batch_inference_time = calculate_inference_time(model, device, x_batch)
+            else:
+                logits, batch_inference_time = calculate_inference_time(model, device, x_batch, aux_batch)
             inference_time_seconds += float(batch_inference_time)
             inference_sample_count += int(batch_size)
             if isinstance(loss_func, nn.BCEWithLogitsLoss):
@@ -310,7 +348,6 @@ def _evaluate_classification(cur, model, val_loader, loss_func, checkpoint_path=
                     "correct": bool(preds_np[batch_idx] == labels_np[batch_idx]),
                     "event_time": float(event_time_np[batch_idx]),
                     "censorship": float(censor_np[batch_idx]),
-                    "clinical": clinical_data_list[batch_idx],
                     "logits": logits_np[batch_idx],
                     "probabilities": probs_np[batch_idx],
                     "risk": float(risks_np[batch_idx]),
@@ -345,8 +382,8 @@ def _evaluate_classification(cur, model, val_loader, loss_func, checkpoint_path=
     os.makedirs(result_dir, exist_ok=True)
     os.makedirs(checkpoint_dir, exist_ok=True)
 
-    pkl_path = os.path.join(checkpoint_dir, f"split_{cur}_results.pkl")
-    csv_path = os.path.join(result_dir, f"split_{cur}_predictions.csv")
+    pkl_path = os.path.join(checkpoint_dir, f"split_{args.modality}_{cur}_results.pkl")
+    csv_path = os.path.join(result_dir, f"split_{args.modality}_{cur}_predictions.csv")
     pd.DataFrame(output_rows).to_csv(csv_path, index=False)
     _save_pkl(pkl_path, patient_results)
 
@@ -388,12 +425,11 @@ def train_model(cur, args, loss_func, model, optimizer, lr_scheduler, train_load
         all_risks = []
 
         for batch in train_loader:
-            _, x_batch, y_batch, event_time_batch, censor_batch, _ = batch
-
-            # print(f"Batch x shape: {x_batch.shape}, y shape: {y_batch.shape}")
-            # print(f"Header of batch x: {x_batch[0][:5]}, batch y: {y_batch[0]}")
+            x_batch, aux_batch, y_batch, event_time_batch, censor_batch, _ = _parse_batch(batch)
 
             x_batch = x_batch.to(device)
+            if aux_batch is not None:
+                aux_batch = aux_batch.to(device)
             y_batch = y_batch.to(device)
             if event_time_batch is not None:
                 event_time_batch = event_time_batch.to(device)
@@ -401,7 +437,10 @@ def train_model(cur, args, loss_func, model, optimizer, lr_scheduler, train_load
                 censor_batch = censor_batch.to(device)
 
             optimizer.zero_grad()
-            logits = model(x_batch)
+            if aux_batch is None:
+                logits = model(x_batch)
+            else:
+                logits = model(x_batch, aux_batch)
             loss = loss_func(logits, y_batch.long())
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
@@ -442,6 +481,7 @@ def train_model(cur, args, loss_func, model, optimizer, lr_scheduler, train_load
     total_loss = history["train_loss"][-1] if history["train_loss"] else 0.0
     
     return history, (total_cindex, total_loss), final_model_path
+    
 
 def save_final_fold_summary(fold_metrics, model, genomic_file_name, output_dir=None):
     """

@@ -4,6 +4,7 @@ import numpy as np
 from inspect import signature
 from dataset.SurvivalGenomicDataset import SurvivalGenomicDataset
 from dataset.SurvivalWSIDataset import SurvivalWSIDataset
+from dataset.SurvivalMultimodalDataset import SurvivalMultimodalDataset
 from utils.process_args import _process_args
 from utils.core_utils import _train_val, save_final_fold_summary
 
@@ -21,10 +22,7 @@ def main(args, dataset_class):
             fold_indices=list(range(i, len(dataset_class.metadata), folds))
         )
 
-        print(f"Fold {i}:")
-        print(f"Train split: {len(train_split)} samples")
-        print(f"Test split: {len(test_split)} samples")
-    
+        print("sample of training split:", type(train_split))
         results_dict, metrics, best_model_path, eval_results = _train_val(args, train_split, test_split, i)
         (
             train_cindex,
@@ -64,7 +62,8 @@ if __name__ == "__main__":
 
     DATASET_FACTORY = {
     "SurvivalGenomicDataset": SurvivalGenomicDataset,
-    "SurvivalWSIDataset": SurvivalWSIDataset
+    "SurvivalWSIDataset": SurvivalWSIDataset,
+    "SurvivalMultimodalDataset": SurvivalMultimodalDataset,
     }
 
     args = _process_args()
@@ -78,7 +77,6 @@ if __name__ == "__main__":
         "h5_dir": args.h5_dir,
         "pt_dir": args.pt_dir,
         "wsi_feature_dim": args.wsi_feature_dim,
-        "encoder_model_name": args.encoder_model_name,
         "seed": args.seed,
         "label_col": args.label_col,
         "n_bins": args.n_bins,

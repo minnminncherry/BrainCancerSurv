@@ -22,8 +22,11 @@ def _get_split_loader(args, split_dataset, training=False, testing=False, weight
     
     if args.modality in ["mlp", "snn", "gen2vec", "resmlp", "resnet_mlp"]:
         collate_fn = _collate_genomic
-    elif args.modality == "mil":
+    elif args.modality in ["mil","transmil"]:
         collate_fn = _collate_wsi
+        batch_size = args.batch_size
+    elif args.modality in ["multimodal_late_fusion"]:
+        collate_fn = _collate_multimodal
         batch_size = args.batch_size
     else:
         raise NotImplementedError(f"Modality {args.modality} not implemented")
@@ -54,13 +57,13 @@ def _collate_genomic(batch):
         - c : torch.FloatTensor
         - clinical_data_list : List
     """
-    img = torch.ones(len(batch), 1)
+    # img = torch.ones(len(batch), 1)
     omics = torch.stack([item[1] for item in batch], dim=0)
     label = torch.LongTensor([item[2] for item in batch])
     event_time = torch.FloatTensor([item[3] for item in batch])
     c = torch.FloatTensor([item[4] for item in batch])
     clinical_data_list = [item[5] for item in batch]
-    return img, omics, label, event_time, c, clinical_data_list
+    return omics, label, event_time, c, clinical_data_list
 
 
 def _collate_wsi(batch):
@@ -77,4 +80,20 @@ def _collate_wsi(batch):
     event_time = torch.FloatTensor([item[2] for item in batch])
     c = torch.FloatTensor([item[3] for item in batch])
     clinical_data_list = [item[4] for item in batch]
-    return img, x, label, event_time, c, clinical_data_list
+    return x, label, event_time, c, clinical_data_list
+
+def _collate_multimodal(batch):
+    """
+    Collate function for multimodal datasets.
+    """
+    img = pad_sequence(
+        [item[0].float() for item in batch],
+        batch_first=True,
+        padding_value=0.0,
+    )
+    omics = torch.stack([item[1] for item in batch], dim=0)
+    label = torch.LongTensor([item[2] for item in batch])
+    event_time = torch.FloatTensor([item[3] for item in batch])
+    c = torch.FloatTensor([item[4] for item in batch])
+    clinical_data_list = [item[5] for item in batch]
+    return img, omics, label, event_time, c, clinical_data_list

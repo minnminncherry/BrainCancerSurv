@@ -14,7 +14,7 @@ class SurvivalSplitWSIDataset(Dataset):
     `(wsi_features, label, event_time, censorship, clinical_data)`.
     """
 
-    def __init__(self, x, y, df, feature_dim=512, encoder_model_name="resnet50", encoder_batch_size=32, pt_dir=None):
+    def __init__(self, x, y, df, feature_dim=1024, pt_dir=None):
         print(f"Initializing SurvivalSplitWSIDataset with {len(y)} samples and feature dimension {feature_dim}.")
         self.df = df.reset_index(drop=True).copy()
         self.y = np.asarray(y, dtype=np.int64)
@@ -54,6 +54,7 @@ class SurvivalSplitWSIDataset(Dataset):
         try:
             print(f"Loading WSI features from PT file: {pt_file} on device: {load_device}")
             features = torch.load(pt_file, map_location=load_device, weights_only=True)
+            print(f"Feature shape : {features.shape}")
         except TypeError:
             features = torch.load(pt_file, map_location=load_device)
 
@@ -75,6 +76,8 @@ class SurvivalSplitWSIDataset(Dataset):
         idx = int(idx)
         if idx < 0 or idx >= len(self.y):
             raise IndexError(f"Index out of range: {idx}")
+
+        print(f"Fetching item at index: {idx}")
         
         row = self.df.iloc[idx]
         label = int(self.y[idx])
@@ -91,6 +94,7 @@ class SurvivalSplitWSIDataset(Dataset):
                 wsi_features = patch_entry["features"].float()
             else:
                 wsi_features = self._load_pt_features(patch_entry)
+                # print(f"Final wsi feature shape : {wsi_features.shape}")
         else:
             raise TypeError(f"Unsupported WSI patch entry type: {type(patch_entry)}")
 
@@ -100,13 +104,14 @@ class SurvivalSplitWSIDataset(Dataset):
             wsi_features = torch.empty((0, self.feature_dim), dtype=torch.float32, device=device)
         else:
             clinical_data["n_patches"] = wsi_features.shape[0]
+        # print("Shape of WSI features:", wsi_features)
 
         return wsi_features, label, event_time, censorship, clinical_data
 
 
 class SurvivalWSIDataset():
 
-    ID_CANDIDATES = ("patient_id", "_PATIENT", "sampleID", "bcr_patient_barcode")
+    ID_CANDIDATES = ("patient_id", "_PATIENT", "bcr_patient_barcode")
     CENSOR_CANDIDATES = ("censorship", "censor", "event", "status")
 
     def __init__(
@@ -120,8 +125,7 @@ class SurvivalWSIDataset():
         h5_dir=None,
         slide_dir=None,
         pt_dir=None,
-        wsi_feature_dim=2048,
-        encoder_model_name="resnet50",
+        wsi_feature_dim=1024,
         modality="mil",
         opt="adam",
         lr=1e-3,
@@ -138,7 +142,6 @@ class SurvivalWSIDataset():
         self.slide_dir = slide_dir
         self.pt_dir = pt_dir
         self.wsi_feature_dim = int(wsi_feature_dim)
-        self.encoder_model_name = encoder_model_name
         self.modality = modality
         self.opt = opt
         self.lr = lr
@@ -165,27 +168,28 @@ class SurvivalWSIDataset():
         self.metadata[f"{self.label_col}_bin"] = self.labels
         self.metadata["censorship"] = self.__build_censorship(self.metadata)
 
-        def join_values(values):
-            return ";".join(values.dropna().astype(str))
+        # slide_info = (
+        #     self.slide_data
+        #     .groupby("patient_id")
+        #     .agg(
+        #         slide_ids=("pt_filename", join_values),
+        #         n_slides=("patient_id", "size"),
+        #     )
+        #     .reset_index()
+        # )
 
-        slide_info = (
-            self.slide_data
-            .groupby("patient_id")
-            .agg(
-                slide_ids=("svs_filename", join_values),
-                n_slides=("patient_id", "size"),
-            )
-            .reset_index()
-        )
+        # print(f"Slide info head:\n{slide_info.head()}, columns: {slide_info.columns.tolist()}")
         self.metadata = self.metadata.merge(
-            slide_info,
+            self.slide_data,
             left_on="_PATIENT",
             right_on="patient_id",
-            how="left",
-        ).drop(columns=["patient_id"])
+            how="inner",
+        ).drop(columns=["patient_id", "svs_filename", "h5_filename", "status"])
 
-        self.metadata["slide_ids"] = self.metadata["slide_ids"].fillna("")
-        self.metadata["n_slides"] = self.metadata["n_slides"].fillna(0).astype(int)
+        # print(f"Metadata head after merging with slide data:\n{self.metadata.head()}, columns: {self.metadata.columns.tolist()}")
+
+        # self.metadata["slide_ids"] = self.metadata["slide_ids"].fillna("")
+        # self.metadata["n_slides"] = self.metadata["n_slides"].fillna(0).astype(int)
 
     def __build_censorship(self, metadata):
         """
@@ -227,21 +231,28 @@ class SurvivalWSIDataset():
         x = PT file paths containing pre-computed WSI patch features
         y = survival bin label
         """
-        data = self.metadata[self.metadata["n_slides"] > 0].reset_index(drop=True)
+        # removing the patient info if there is no slide data available for that patient
+        # data = self.metadata[self.metadata["n_slides"] > 0].reset_index(drop=True)
         bin_col = f"{self.label_col}_bin"
 
         if fold_indices is None:
             fold_indices = []
         fold_indices = np.asarray(fold_indices, dtype=np.int64)
 
-        is_test = data.index.isin(fold_indices)
+        is_test = self.metadata.index.isin(fold_indices)
 
         if split_key == "train":
-            split_df = data.loc[~is_test].reset_index(drop=True)
+            split_df = self.metadata.loc[~is_test].reset_index(drop=True)
         elif split_key == "test":
-            split_df = data.loc[is_test].reset_index(drop=True)
+            split_df = self.metadata.loc[is_test].reset_index(drop=True)
         else:
-            split_df = data.reset_index(drop=True)
+            split_df = self.metadata.reset_index(drop=True)
+
+        print(split_df[bin_col], type(split_df[bin_col]))
+ 
+        split_df = split_df.drop(columns=['sampleID', 'CDE_DxAge', 'CDE_survival_days', 'CDE_vital_status','_INTEGRATION','bcr_patient_barcode','_primary_site', 'bcr_patient_uuid',
+                                          'days_to_death', 'days_to_last_followup','days_to_new_tumor_event_after_initial_treatment', 'gender','vital_status',
+                                           'year_of_initial_pathologic_diagnosis'], errors='ignore')
 
         y = split_df[bin_col].astype("int64").values
 
@@ -258,28 +269,33 @@ class SurvivalWSIDataset():
                 patch_data.append({
                     "pt_file": pt_file,
                 })
-                print()
+                # print(f"Processing patient: {patient_id}")
         else:
             raise ValueError("SurvivalWSIDataset requires pt_dir for MIL training.")
 
-        return SurvivalSplitWSIDataset(
+        result = SurvivalSplitWSIDataset(
             patch_data,
             y,
             split_df,
             feature_dim=self.wsi_feature_dim,
-            encoder_model_name=self.encoder_model_name,
             pt_dir=self.pt_dir,
         )
+
+        print(f"Returning split with {len(result)} samples, head of result.df:\n{result.df.columns}")
+        
+        return result
 
     def return_splits(self, args, fold_indices):
         train_split = self.__return_splits("train", fold_indices)
         test_split = self.__return_splits("test", fold_indices)
+        # one_sample_train_split = train_split[0]
+        # print(f"One sample train split: {one_sample_tra_, x_batch, y_batch, event_time_batch, censor_batch, clinical_data_listin_split}")
 
         result_dir = _get_result_dir()
         os.makedirs(result_dir, exist_ok=True)
-        train_split.df.to_csv(os.path.join(result_dir, "train_merged_split.csv"), index=False)
-        test_split.df.to_csv(os.path.join(result_dir, "test_merged_split.csv"), index=False)
+        train_split.df.to_csv(os.path.join(result_dir, "wsi_train_merged_split.csv"), index=False)
+        test_split.df.to_csv(os.path.join(result_dir, "wsi_test_merged_split.csv"), index=False)
         print('Done!')
-        print("Training on {} samples".format(len(train_split)))
-        print("Testing on {} samples".format(len(test_split)))
+        print(f"Training on {len(train_split)} samples")
+        print(f"Testing on {len(test_split)} samples")
         return train_split, test_split, None

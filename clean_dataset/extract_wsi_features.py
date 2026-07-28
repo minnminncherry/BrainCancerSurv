@@ -3,7 +3,7 @@ Extract features from WSI patches using coordinates from H5 files.
 Saves pre-computed features as PT files for efficient dataset loading.
 
 Usage:
-    python extract_wsi_features.py --h5_dir <path_to_h5_dir> --slide_dir <path_to_slides> --pt_dir <path_to_pt_output> --encoder resnet50
+    python extract_wsi_features.py --h5_dir <path_to_h5_dir> --slide_dir <path_to_slides> --pt_dir <path_to_pt_output> --encoder resnet50 --feature_dim 1024
 """
 
 import os
@@ -19,7 +19,6 @@ from tqdm import tqdm
 # Add parent directory to path so we can import utils
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from utils.core_utils import encoder
-
 
 CUDA_RETRY_ERRORS = (
     "CUDNN_STATUS_NOT_INITIALIZED",
@@ -60,7 +59,19 @@ def encode_patch_batch(batch, encoder_model, device):
         return torch.cat([first_features, second_features], dim=0)
 
 
-def extract_features_from_wsi(h5_file, slide_file, encoder_model, img_transform, device, batch_size=32):
+def _resize_feature_dim(features, output_dim):
+    """Resize feature tensor to the desired output dimension by truncation or zero padding."""
+    current_dim = features.shape[-1]
+    if current_dim == output_dim:
+        return features
+    if current_dim > output_dim:
+        return features[:, :output_dim]
+
+    pad = torch.zeros(features.shape[0], output_dim - current_dim, dtype=features.dtype)
+    return torch.cat([features, pad], dim=1)
+
+
+def extract_features_from_wsi(h5_file, slide_file, encoder_model, img_transform, device, batch_size=32, output_dim=None):
     """
     Extract features from a WSI slide using patch coordinates from h5 file.
     
@@ -69,7 +80,9 @@ def extract_features_from_wsi(h5_file, slide_file, encoder_model, img_transform,
         slide_file: Path to original WSI slide (.svs file)
         encoder_model: Pre-trained encoder model
         img_transform: Image transformation pipeline
+        device: Torch device for extraction
         batch_size: Batch size for feature extraction
+        output_dim: Optional output feature dimension to resize features to
         
     Returns:
         features: Tensor of shape (n_patches, feature_dim)
@@ -128,6 +141,10 @@ def extract_features_from_wsi(h5_file, slide_file, encoder_model, img_transform,
     # Flatten if needed
     if features.dim() > 2:
         features = features.reshape(features.shape[0], -1)
+
+    if output_dim is not None:
+        features = _resize_feature_dim(features, output_dim)
+        print(f"Resized features to output dimension: {output_dim}, features shape: {features.shape}")
     
     print(f"Extracted features shape: {features.shape} and length of features: {len(features)}")
     return features.float(), coords.tolist()
@@ -202,7 +219,8 @@ def main(args):
                 encoder_model,
                 img_transform,
                 device=device,
-                batch_size=args.batch_size
+                batch_size=args.batch_size,
+                output_dim=args.feature_dim,
             )
             
             # Save features as PT file
@@ -251,6 +269,12 @@ if __name__ == "__main__":
         type=int,
         default=32,
         help="Batch size for feature extraction (default: 32)"
+    )
+    parser.add_argument(
+        "--feature_dim",
+        type=int,
+        default=2048,
+        help="Optional output feature dimension. If set, extracted features are truncated or padded to this size."
     )
     parser.add_argument(
         "--device",
