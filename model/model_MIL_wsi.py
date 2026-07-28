@@ -15,7 +15,7 @@ class MILWSI(nn.Module):
         logits: [batch_size, n_classes]
     """
 
-    def __init__(self, input_dim=512, n_classes=4, hidden_dim=256, dropout=0.25):
+    def __init__(self, input_dim=1024, n_classes=4, hidden_dim=256, dropout=0.25):
         super().__init__()
         self.input_dim = int(input_dim)
         self.n_classes = int(n_classes)
@@ -57,8 +57,8 @@ class MILWSI(nn.Module):
             return logits, attention_weights
         return logits
     
-    def captum(self, omics):
-        logits = self.forward(omics)
+    def captum(self, wsi):
+        logits = self.forward(wsi)
         hazards = torch.softmax(logits, dim=1)
         survival = torch.cumprod(1 - hazards, dim=1)
         risk = -torch.sum(survival, dim=1)

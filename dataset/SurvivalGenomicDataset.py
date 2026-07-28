@@ -151,8 +151,8 @@ class SurvivalGenomicDataset:
 
         result_dir = _get_result_dir()
         os.makedirs(result_dir, exist_ok=True)
-        train_split.df.to_csv(os.path.join(result_dir, "train_merged_split.csv"), index=False)
-        test_split.df.to_csv(os.path.join(result_dir, "test_merged_split.csv"), index=False)
+        train_split.df.to_csv(os.path.join(result_dir, "genomic_train_merged_split.csv"), index=False)
+        test_split.df.to_csv(os.path.join(result_dir, "genomic_test_merged_split.csv"), index=False)
         print('Done!')
         print("Training on {} samples".format(len(train_split)))
         print("Testing on {} samples".format(len(test_split)))
@@ -231,7 +231,8 @@ class SurvivalGenomicDataset:
 
         is_test = merged["__row_index"].isin(fold_indices)
         split_df = merged[~is_test].copy() if split_key == "train" else merged[is_test].copy()
-        
+
+        split_df = split_df.drop(columns=["__row_index"])
         x = split_df[feature_cols].apply(pd.to_numeric, errors="coerce").to_numpy(dtype=np.float32)
         if np.isnan(x).any():
             bad = int(np.isnan(x).sum())
@@ -255,6 +256,10 @@ class SurvivalGenomicDataset:
             if scaler_to_use.get("feature_cols") != feature_cols:
                 raise ValueError("Feature columns do not match fitted scaler feature columns.")
             x = (x - scaler_to_use["mean"].astype(np.float32)) / scaler_to_use["std"].astype(np.float32)
+
+        # result = SurvivalGenomicSplitDataset(x=x, y=y, df=split_df)
+
+        # print(f"Result: {result.head()}")
 
         return SurvivalGenomicSplitDataset(x=x, y=y, df=split_df), fitted_scaler
     
@@ -294,8 +299,4 @@ class SurvivalGenomicDataset:
 
     def __len__(self):
         return len(self.metadata)
-    
-    def _load_wsi_embs_from_path(self, wsi_emb_path):
-        if not os.path.exists(wsi_emb_path):
-            raise FileNotFoundError(f"WSI embedding file not found: {wsi_emb_path}")
-        return torch.load(wsi_emb_path)
+
