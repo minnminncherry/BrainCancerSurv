@@ -168,17 +168,6 @@ class SurvivalWSIDataset():
         self.metadata[f"{self.label_col}_bin"] = self.labels
         self.metadata["censorship"] = self.__build_censorship(self.metadata)
 
-        # slide_info = (
-        #     self.slide_data
-        #     .groupby("patient_id")
-        #     .agg(
-        #         slide_ids=("pt_filename", join_values),
-        #         n_slides=("patient_id", "size"),
-        #     )
-        #     .reset_index()
-        # )
-
-        # print(f"Slide info head:\n{slide_info.head()}, columns: {slide_info.columns.tolist()}")
         self.metadata = self.metadata.merge(
             self.slide_data,
             left_on="_PATIENT",
@@ -207,9 +196,6 @@ class SurvivalWSIDataset():
         if "days_to_death" in metadata.columns:
             has_death_day = pd.to_numeric(metadata["days_to_death"], errors="coerce").notna()
             censorship[has_death_day] = 0
-        if "days_to_last_followup" in metadata.columns:
-            has_followup = pd.to_numeric(metadata["days_to_last_followup"], errors="coerce").notna()
-            censorship[censorship.isna() & has_followup] = 1
 
         return censorship.fillna(0.0)
 

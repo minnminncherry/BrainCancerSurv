@@ -58,11 +58,11 @@ def _collate_genomic(batch):
         - clinical_data_list : List
     """
     # img = torch.ones(len(batch), 1)
-    omics = torch.stack([item[1] for item in batch], dim=0)
-    label = torch.LongTensor([item[2] for item in batch])
-    event_time = torch.FloatTensor([item[3] for item in batch])
-    c = torch.FloatTensor([item[4] for item in batch])
-    clinical_data_list = [item[5] for item in batch]
+    omics = torch.stack([item[0] for item in batch], dim=0)
+    label = torch.LongTensor([item[1] for item in batch])
+    event_time = torch.FloatTensor([item[2] for item in batch])
+    c = torch.FloatTensor([item[3] for item in batch])
+    clinical_data_list = [item[4] for item in batch]
     return omics, label, event_time, c, clinical_data_list
 
 

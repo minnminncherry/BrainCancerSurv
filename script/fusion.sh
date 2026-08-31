@@ -26,7 +26,7 @@ CUDA_VISIBLE_DEVICES=0 python "$REPO_ROOT/main.py" \
     --opt "adam" \
     --lr 1e-4 \
     --batch_size 4 \
-    --num_workers 2 \
+    --num_workers 0 \
     --epoch 10 \
     --wsi_feature_dim 1024 \
     --resmlp_hidden_dim 256

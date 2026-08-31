@@ -38,7 +38,7 @@ def _train_val(args, train_dataset, test_dataset, cur):
 
     lr_scheduler = _get_lr_scheduler(args, optimizer, train_loader)
 
-    results_dict, (train_cindex, total_loss), best_model_path = train_model(
+    results_dict, (train_cindex, total_loss, training_time_seconds, training_time_per_sample_seconds), best_model_path = train_model(
         cur,
         args,
         loss_func,
@@ -62,6 +62,8 @@ def _train_val(args, train_dataset, test_dataset, cur):
             total_loss,
             final_val_cindex,
             final_val_loss,
+            training_time_seconds,
+            training_time_per_sample_seconds,
             inference_summary["inference_time_seconds"],
             inference_summary["inference_time_per_sample_seconds"],
         ),
@@ -94,18 +96,34 @@ def risk_scores(logits):
     class_ids = torch.arange(logits.size(1), device=logits.device, dtype=probs.dtype)
     return -torch.sum(probs * class_ids, dim=1)
 
-def calculate_inference_time(model, device, *inputs):
-    """
-    Run one model forward pass and return logits plus elapsed inference time.
-    CUDA is synchronized so GPU timing is measured correctly.
-    """
+def _sync_cuda(device):
     if device.type == "cuda":
         torch.cuda.synchronize(device)
+
+
+def calculate_inference_time_per_sample(model, device, sample_count, *inputs):
+    """
+    Run one inference forward pass and return:
+    logits, total batch inference time, inference time per sample.
+    """
+    sample_count = max(int(sample_count), 1)
+    _sync_cuda(device)
     start_time = time.perf_counter()
     logits = model(*inputs)
-    if device.type == "cuda":
-        torch.cuda.synchronize(device)
-    return logits, time.perf_counter() - start_time
+    _sync_cuda(device)
+    total_time = time.perf_counter() - start_time
+    return logits, total_time, total_time / sample_count
+
+
+def calculate_training_time(start_time, device, sample_count=1):
+    """
+    Calculate elapsed training time from `start_time`.
+    Returns total elapsed seconds and elapsed seconds per sample.
+    """
+    sample_count = max(int(sample_count), 1)
+    _sync_cuda(device)
+    total_time = time.perf_counter() - start_time
+    return total_time, total_time / sample_count
 
 
 def _parse_batch(batch):
@@ -170,8 +188,9 @@ def _init_model(args):
         model_dict = {
              "input_dim": genomic_input_dim,
              "n_classes": int(args.n_classes),
-             "projection_dim": 256,
+             "projection_dim": 4028,
              "dropout": dropout,
+             "num_layers": 10,
         }
         model = MLPGenomics(**model_dict)
     elif args.modality == "snn":
@@ -179,8 +198,9 @@ def _init_model(args):
         model_dict = {
             "input_dim": genomic_input_dim,
             "n_classes": int(args.n_classes),
-            "hidden_dim": 256,
+            "hidden_dim": 2048,
             "dropout": dropout,
+            "num_layers": 8,
         }
         model = SNNGenomics(**model_dict)
     elif args.modality == "gen2vec":
@@ -189,7 +209,7 @@ def _init_model(args):
             "input_dim": genomic_input_dim,
             "n_classes": int(args.n_classes),
             "embedding_dim": int(getattr(args, "gen2vec_embedding_dim", 256)),
-            "hidden_dim": int(getattr(args, "gen2vec_hidden_dim", 256)),
+            "hidden_dim": int(getattr(args, "gen2vec_hidden_dim", 1024)),
             "dropout": dropout,
             "use_zero_mask": True
         }
@@ -312,9 +332,13 @@ def _evaluate_classification(args,cur, model, val_loader, loss_func, checkpoint_
 
             batch_size = y_batch.size(0)
             if aux_batch is None:
-                logits, batch_inference_time = calculate_inference_time(model, device, x_batch)
+                logits, batch_inference_time, batch_inference_time_per_sample = calculate_inference_time_per_sample(
+                    model, device, batch_size, x_batch
+                )
             else:
-                logits, batch_inference_time = calculate_inference_time(model, device, x_batch, aux_batch)
+                logits, batch_inference_time, batch_inference_time_per_sample = calculate_inference_time_per_sample(
+                    model, device, batch_size, x_batch, aux_batch
+                )
             inference_time_seconds += float(batch_inference_time)
             inference_sample_count += int(batch_size)
             if isinstance(loss_func, nn.BCEWithLogitsLoss):
@@ -351,7 +375,7 @@ def _evaluate_classification(args,cur, model, val_loader, loss_func, checkpoint_
                     "logits": logits_np[batch_idx],
                     "probabilities": probs_np[batch_idx],
                     "risk": float(risks_np[batch_idx]),
-                    "inference_time_seconds": float(batch_inference_time / max(batch_size, 1)),
+                    "inference_time_seconds": float(batch_inference_time_per_sample),
                 }
                 row = {
                     "case_id": case_id,
@@ -361,7 +385,7 @@ def _evaluate_classification(args,cur, model, val_loader, loss_func, checkpoint_
                     "event_time": float(event_time_np[batch_idx]),
                     "censorship": float(censor_np[batch_idx]),
                     "risk": float(risks_np[batch_idx]),
-                    "inference_time_seconds": float(batch_inference_time / max(batch_size, 1)),
+                    "inference_time_seconds": float(batch_inference_time_per_sample),
                 }
                 for class_idx, prob in enumerate(probs_np[batch_idx]):
                     row[f"prob_class_{class_idx}"] = float(prob)
@@ -382,8 +406,8 @@ def _evaluate_classification(args,cur, model, val_loader, loss_func, checkpoint_
     os.makedirs(result_dir, exist_ok=True)
     os.makedirs(checkpoint_dir, exist_ok=True)
 
-    pkl_path = os.path.join(checkpoint_dir, f"split_{args.modality}_{cur}_results.pkl")
-    csv_path = os.path.join(result_dir, f"split_{args.modality}_{cur}_predictions.csv")
+    pkl_path = os.path.join(checkpoint_dir, f"split_{args.modality}_{args.genomic_file_name}_{cur}_results.pkl")
+    csv_path = os.path.join(result_dir, f"split_{args.modality}_{args.genomic_file_name}_{cur}_predictions.csv")
     pd.DataFrame(output_rows).to_csv(csv_path, index=False)
     _save_pkl(pkl_path, patient_results)
 
@@ -415,6 +439,8 @@ def train_model(cur, args, loss_func, model, optimizer, lr_scheduler, train_load
         "train_loss": [],
         "train_cindex": [],
     }
+    training_start_time = time.perf_counter()
+    training_sample_count = 0
 
     for epoch_idx in range(epochs):
         model.train()
@@ -459,6 +485,7 @@ def train_model(cur, args, loss_func, model, optimizer, lr_scheduler, train_load
                 all_censorships.extend(censor_batch.detach().cpu().numpy().tolist())
                 all_risks.extend(risks.detach().cpu().numpy().tolist())
             train_count += int(batch_size)
+            training_sample_count += int(batch_size)
             print(f"Batch {train_count} | Loss: {loss.item():.4f} | Batch Bin Acc: {(preds == target_bins).float().mean().item():.4f}")
 
         train_loss = train_loss_sum / max(train_count, 1)
@@ -479,8 +506,17 @@ def train_model(cur, args, loss_func, model, optimizer, lr_scheduler, train_load
 
     total_cindex = history["train_cindex"][-1] if history["train_cindex"] else 0.0
     total_loss = history["train_loss"][-1] if history["train_loss"] else 0.0
+    training_time_seconds, training_time_per_sample_seconds = calculate_training_time(
+        training_start_time,
+        device,
+        training_sample_count,
+    )
+    print(
+        f"[Fold {cur}] Training time={training_time_seconds:.4f}s | "
+        f"per_sample={training_time_per_sample_seconds:.6f}s"
+    )
     
-    return history, (total_cindex, total_loss), final_model_path
+    return history, (total_cindex, total_loss, training_time_seconds, training_time_per_sample_seconds), final_model_path
     
 
 def save_final_fold_summary(fold_metrics, model, genomic_file_name, output_dir=None):
@@ -500,7 +536,12 @@ def save_final_fold_summary(fold_metrics, model, genomic_file_name, output_dir=N
         "final_val_loss": float(summary_df["final_val_loss"].mean()) if len(summary_df) else 0.0,
         "best_model_path": "",
     }
-    for col in ("inference_time_seconds", "inference_time_per_sample_seconds"):
+    for col in (
+        "training_time_seconds",
+        "training_time_per_sample_seconds",
+        "inference_time_seconds",
+        "inference_time_per_sample_seconds",
+    ):
         if col in summary_df.columns:
             average_values[col] = float(summary_df[col].mean()) if len(summary_df) else 0.0
 

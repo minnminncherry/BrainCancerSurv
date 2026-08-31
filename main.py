@@ -29,6 +29,8 @@ def main(args, dataset_class):
             total_loss,
             val_cindex,
             val_loss,
+            training_time_seconds,
+            training_time_per_sample_seconds,
             inference_time_seconds,
             inference_time_per_sample_seconds,
         ) = metrics
@@ -40,6 +42,8 @@ def main(args, dataset_class):
                 "train_loss": total_loss,
                 "final_val_cindex": val_cindex,
                 "final_val_loss": val_loss,
+                "training_time_seconds": training_time_seconds,
+                "training_time_per_sample_seconds": training_time_per_sample_seconds,
                 "inference_time_seconds": inference_time_seconds,
                 "inference_time_per_sample_seconds": inference_time_per_sample_seconds,
                 "best_model_path": best_model_path,
@@ -50,9 +54,11 @@ def main(args, dataset_class):
     if fold_metrics:
         avg_val_cindex = float(np.mean([metric["final_val_cindex"] for metric in fold_metrics]))
         avg_val_loss = float(np.mean([metric["final_val_loss"] for metric in fold_metrics]))
+        avg_training_time = float(np.mean([metric["training_time_seconds"] for metric in fold_metrics]))
         avg_inference_time = float(np.mean([metric["inference_time_seconds"] for metric in fold_metrics]))
         print(f"\nAverage final val_cindex across {folds} folds: {avg_val_cindex:.4f}")
         print(f"Average final val_loss across {folds} folds: {avg_val_loss:.4f}")
+        print(f"Average training time across {folds} folds: {avg_training_time:.4f}s")
         print(f"Average inference time across {folds} folds: {avg_inference_time:.4f}s")
 
     print(f"\nTraining completed! All models saved to result/model_checkpoints/")

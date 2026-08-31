@@ -12,6 +12,7 @@ result/
 
 # Codex
 .codex
+.vscode
 
 # OS files
 .DS_Store

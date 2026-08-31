@@ -9,19 +9,28 @@ class MLPGenomics(nn.Module):
         n_classes=4,
         projection_dim=256,
         dropout=0.1,
+        num_layers=2,
     ):
         super(MLPGenomics, self).__init__()
         self.projection_dim = projection_dim
         self.n_classes = n_classes
 
-
-        self.net = nn.Sequential(
-            nn.Linear(input_dim, projection_dim//2), nn.ReLU(), nn.Dropout(dropout),
-            nn.Linear(projection_dim//2, projection_dim//2), nn.ReLU(), nn.Dropout(dropout)
-        ) 
+        hidden_dim = projection_dim // 2
+        layers = [
+            nn.Linear(input_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+        ]
+        for _ in range(max(int(num_layers) - 1, 0)):
+            layers.extend([
+                nn.Linear(hidden_dim, hidden_dim),
+                nn.ReLU(),
+                nn.Dropout(dropout),
+            ])
+        self.net = nn.Sequential(*layers)
 
         self.to_logits = nn.Sequential(
-            nn.Linear(projection_dim //2, n_classes)
+            nn.Linear(hidden_dim, n_classes)
         )
 
     def _get_omics_tensor(self, x=None, **kwargs):

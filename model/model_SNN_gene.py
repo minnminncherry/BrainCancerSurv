@@ -29,14 +29,15 @@ class SNNGenomics(nn.Module):
         n_classes=4,
         hidden_dim=256,
         dropout=0.25,
+        num_layers=2,
     ):
         super().__init__()
         self.n_classes = n_classes
 
-        self.net = nn.Sequential(
-            SNNBlock(input_dim, hidden_dim, dropout=dropout),
-            SNNBlock(hidden_dim, hidden_dim, dropout=dropout),
-        )
+        layers = [SNNBlock(input_dim, hidden_dim, dropout=dropout)]
+        for _ in range(max(int(num_layers) - 1, 0)):
+            layers.append(SNNBlock(hidden_dim, hidden_dim, dropout=dropout))
+        self.net = nn.Sequential(*layers)
         self.to_logits = nn.Linear(hidden_dim, n_classes)
         self._init_weights()
 

@@ -1,10 +1,10 @@
 SCRIPT_DIR="$(cd -- "$(dirname -- "$0")" && pwd)"
 REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 
-LABEL_FILE="$REPO_ROOT/dataset_csv/metadata/clinical_lgg.csv"
-SLIDE_FILE_PATH="$REPO_ROOT/dataset_csv/wsi_data/wsi_metadata_lgg.csv"
-SLIDE_DIR="/media/licongcong/Data 1/TCGA-LGG/collected_wsi"
-PT_DIR="/media/licongcong/Data 1/TCGA-LGG/Feature_wsi"
+LABEL_FILE="$REPO_ROOT/dataset_csv/metadata/clinical_gbm.csv"
+SLIDE_FILE_PATH="$REPO_ROOT/dataset_csv/wsi_data/wsi_metadata_gbm.csv"
+SLIDE_DIR="/media/licongcong/Data 1/TCGA-GBM/collected_wsi"
+PT_DIR="/media/licongcong/Data 1/TCGA-GBM/Feature_wsi"
 
 CUDA_VISIBLE_DEVICES=0 python "$REPO_ROOT/main.py" \
     --data_factory SurvivalWSIDataset\
@@ -15,10 +15,10 @@ CUDA_VISIBLE_DEVICES=0 python "$REPO_ROOT/main.py" \
     --slide_dir "$SLIDE_DIR" \
     --seed 42 \
     --pt_dir "$PT_DIR" \
-    --modality "transmil" \
+    --modality "mil" \
     --n_classes 4 \
     --loss_func "cross_entropy" \
-    --genomic_file_name "lgg_own" \
+    --genomic_file_name "gbm_own" \
     --opt "adam"\
     --lr 5e-4 \
     --batch_size 1 \
