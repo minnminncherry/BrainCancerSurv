@@ -39,22 +39,47 @@ class MRIDataCleaner:
                 truncate_qry = f"TRUNCATE TABLE {table_name};"
                 cursor.execute(truncate_qry)
 
-                for filename in os.listdir(folder_path):
-                    root_name = filename
-                    patient_folder = os.path.join(folder_path, filename)
-                    file_count = 0
-                    print ("Processing file: ", root_name)
-                    for root, dirs, files in os.walk(patient_folder):
-                        # print(f"Found {len(files)} files in {root} and dirname is {dirs}")
-                        for file in files:
-                            if file.lower().endswith(".dcm"):
-                                # print(f"Found DICOM file: {file} in {root}")
-                                file_count += 1
-                    cursor.execute(
-                        f"INSERT INTO {table_name} (patient_id, img_count) VALUES (%s, %s)",
-                        (root_name, file_count)
-                    )
-            self.conn.commit()
-            print("Filenames loaded into database successfully.")
+                sql = (
+                    f"INSERT INTO {table_name} "
+                    "(patient_id, study_id, series_id, image_name, folder_path) "
+                    "VALUES (%s, %s, %s, %s, %s)"
+                )
+
+                inserted_count = 0
+                for patient_id in os.listdir(folder_path):
+                    patient_folder = os.path.join(folder_path, patient_id)
+
+                    print("Processing patient:", patient_id)
+                    for root, _, files in os.walk(patient_folder):
+                        image_files = [f for f in files if not f.startswith(".")]
+                        if not image_files:
+                            continue
+
+                        relative_parts = os.path.relpath(root, patient_folder).split(os.sep)
+                        study_id = relative_parts[0] if relative_parts[0] != "." else ""
+                        series_id = os.path.basename(root)
+
+                        for image_name in image_files:
+                            # print(f"Inserting: {patient_id}, {study_id}, {series_id}, {image_name}, {os.path.join(root, image_name)}")
+                            cursor.execute(sql, (patient_id, study_id, series_id, image_name, root))
+                            inserted_count += 1
+
+                self.conn.commit()
+            print(f"Filenames loaded into database successfully. Total rows: {inserted_count}")
         except Exception as e:
             print(f"Error loading filenames into database: {e}")
+            self.conn.rollback()
+
+    def generate_csv_from_db(self, table_name, output_csv_path):
+        """Generate a CSV file from the database table"""
+        if not self.conn:
+            print("No database connection. call connect_db() first.")
+            return
+
+        try:
+            query = f"SELECT * FROM {table_name};"
+            df = pd.read_sql(query, self.conn)
+            df.to_csv(output_csv_path, index=False)
+            print(f"CSV file generated successfully at: {output_csv_path}")
+        except Exception as e:
+            print(f"Error generating CSV from database: {e}")

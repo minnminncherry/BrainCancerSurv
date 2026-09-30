@@ -5,6 +5,7 @@ from inspect import signature
 from dataset.SurvivalGenomicDataset import SurvivalGenomicDataset
 from dataset.SurvivalWSIDataset import SurvivalWSIDataset
 from dataset.SurvivalMultimodalDataset import SurvivalMultimodalDataset
+from dataset.SurvivalMRIDataset import SurvivalMRIDataset
 from utils.process_args import _process_args
 from utils.core_utils import _train_val, save_final_fold_summary
 
@@ -70,6 +71,7 @@ if __name__ == "__main__":
     "SurvivalGenomicDataset": SurvivalGenomicDataset,
     "SurvivalWSIDataset": SurvivalWSIDataset,
     "SurvivalMultimodalDataset": SurvivalMultimodalDataset,
+    "SurvivalMRIDataset": SurvivalMRIDataset
     }
 
     args = _process_args()
@@ -93,6 +95,8 @@ if __name__ == "__main__":
         "lr": args.lr,
         "batch_size": args.batch_size,
         "num_workers": args.num_workers,
+        "mri_dir": args.mri_dir,
+        "mri_file_name": args.mri_file_name
     }
     valid_args = signature(dataset_class.__init__).parameters
     dataset_args = {key: value for key, value in dataset_args.items() if key in valid_args}

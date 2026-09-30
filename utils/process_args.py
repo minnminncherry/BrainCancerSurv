@@ -31,5 +31,7 @@ def _process_args():
     parser.add_argument("--dcm_input_dir", type=str, default="/media/licongcong/Data 1/TCGA-GBM/CT-images/tcga_gbm/TCGA-02-0001/2.25.68803095896966276583382138924964839274/SM_1.3.6.1.4.1.5962.99.1.1137040358.1496799760.1637519612902.2.0", help="Directory containing DICOM (.dcm) files.")
     parser.add_argument("--jpg_output_dir", type=str, default="/media/licongcong/Data 1/TCGA-GBM/CT-images/tcga_gbm/TCGA-02-0001/2.25.68803095896966276583382138924964839274", help="Directory to save converted JPG files.")
     # Support both names used in scripts.
+    parser.add_argument("--mri_dir", type=str, help="MRI photo data dir")
+    parser.add_argument("--mri_file_name", type=str, help="MRI metadata file name")
     parser.add_argument("--type_of_pathway", "--type_of_path", dest="type_of_pathway", type=str, default="hallmark")
     return parser.parse_args()
