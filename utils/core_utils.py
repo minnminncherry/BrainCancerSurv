@@ -1,4 +1,6 @@
 import torch
+import copy
+import numpy as np
 import torch.nn as nn
 from model.model_MLP_gene import MLPGenomics
 from model.model_SNN_gene import SNNGenomics
@@ -7,6 +9,8 @@ from model.model_resnet_mlp_gene import ResMLPGenomics
 from model.model_MIL_wsi import MILWSI
 from model.model_transmil_wsi import TRANSMILWSI
 from model.late_fusion import MultimodalLateFusion
+from model.cross_attn import MultimodalCrossAttention
+from model.model_ViT import ViTMRI
 import os
 import time
 import pickle
@@ -34,6 +38,14 @@ def _train_val(args, train_dataset, test_dataset, cur):
 
     optimizer = _init_optim(args, model)
 
+    stop_loader = None
+    if getattr(args, "early_stopping_patience", 0) > 0:
+        original_train = train_dataset
+        train_dataset, stop_dataset = _split_genomic_training(args, original_train, cur)
+        mean, std = original_train.early_stopping_scaler
+        test_dataset = copy.copy(test_dataset)
+        test_dataset.x = ((test_dataset.x - mean) / std).astype(np.float32)
+        stop_loader = _get_split_loader(args, stop_dataset, testing=True, batch_size=args.batch_size)
     train_loader, val_loader = _init_loader(args, train_dataset, test_dataset)
 
     lr_scheduler = _get_lr_scheduler(args, optimizer, train_loader)
@@ -45,7 +57,8 @@ def _train_val(args, train_dataset, test_dataset, cur):
         model,
         optimizer,
         lr_scheduler,
-        train_loader
+        train_loader,
+        stop_loader=stop_loader,
     )
     eval_results, final_val_cindex, final_val_loss, inference_summary = _evaluate_classification(
         args,
@@ -72,19 +85,23 @@ def _train_val(args, train_dataset, test_dataset, cur):
     )
 
 def _init_loss_function(args):
-    """
-    Simple loss selector for genomic classification.
-    - cross_entropy (default): multi-class classification
-    - bce: binary classification with sigmoid outputs
-    """
+    """Select cross-entropy or sigmoid binary cross-entropy on logits."""
     loss_name = args.loss_func
     loss_name = str(loss_name).strip().lower()
 
     if loss_name in {"cross_entropy", "ce", ""}:
         return nn.CrossEntropyLoss()
-    if loss_name in {"bce", "bcewithlogits"}:
+    if loss_name in {"sigmoid", "bce", "bcewithlogits"}:
         return nn.BCEWithLogitsLoss()
     raise ValueError(f"Unsupported loss_func: {loss_name}")
+
+
+def _classification_loss(loss_func, logits, labels):
+    if isinstance(loss_func, nn.BCEWithLogitsLoss):
+        # Class indices become one-hot targets matching the model's output shape.
+        targets = torch.nn.functional.one_hot(labels.long(), num_classes=logits.size(1))
+        return loss_func(logits, targets.to(dtype=logits.dtype))
+    return loss_func(logits, labels.long())
 
 
 def prediction_probs(logits):
@@ -221,6 +238,7 @@ def _init_model(args):
             "n_classes": int(args.n_classes),
             "hidden_dim": int(getattr(args, "resmlp_hidden_dim", 256)),
             "dropout": dropout,
+            "num_blocks": int(getattr(args, "resmlp_num_blocks", 5)),
         }
         model = ResMLPGenomics(**model_dict)
     elif args.modality == "mil":
@@ -241,8 +259,17 @@ def _init_model(args):
             "dropout": dropout,
         }
         model = TRANSMILWSI(**model_dict)
-        
-    elif args.modality == "multimodal_late_fusion":
+    elif args.modality == "ViT":
+        dropout = _get_dropout(0.3)
+        model_dict = {
+            "input_dim": int(getattr(args, "wsi_feature_dim", 1024)),
+            "n_classes": int(args.n_classes),
+            "hidden_dim": 128,
+            "dropout": dropout,
+            "num_layers": 2,
+        }
+        model = ViTMRI(**model_dict)
+    elif args.modality in {"multimodal_late_fusion", "multimodal_cross_attention"}:
         dropout = _get_dropout(0.2)
         hidden_dim = int(getattr(args, "resmlp_hidden_dim", 256))
         model_dict = {
@@ -252,7 +279,8 @@ def _init_model(args):
             "hidden_dim": hidden_dim,
             "dropout": dropout,
         }
-        model = MultimodalLateFusion(**model_dict)
+        fusion_class = MultimodalCrossAttention if args.modality == "multimodal_cross_attention" else MultimodalLateFusion
+        model = fusion_class(**model_dict)
     else:
         raise NotImplementedError(f"Modality {args.modality} not implemented")
     
@@ -263,9 +291,9 @@ def _init_optim(args, model):
         return None
     print("arg optimizer:" , args.opt)
     if args.opt == "adam":
-        optimizer = optim.Adam(model.parameters(), lr=args.lr)
+        optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=getattr(args, "reg", 0.0))
     elif args.opt == 'sgd':
-        optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=0.9)
+        optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=0.9, weight_decay=getattr(args, "reg", 0.0))
     
     return optimizer
 
@@ -341,10 +369,7 @@ def _evaluate_classification(args,cur, model, val_loader, loss_func, checkpoint_
                 )
             inference_time_seconds += float(batch_inference_time)
             inference_sample_count += int(batch_size)
-            if isinstance(loss_func, nn.BCEWithLogitsLoss):
-                loss = loss_func(logits.float(), y_batch.float())
-            else:
-                loss = loss_func(logits, y_batch.long())
+            loss = _classification_loss(loss_func, logits, y_batch)
             probs = prediction_probs(logits)
             preds = torch.argmax(probs, dim=1)
             target_bins = y_batch.long()
@@ -422,7 +447,55 @@ def _evaluate_classification(args,cur, model, val_loader, loss_func, checkpoint_
     return patient_results, final_val_cindex, final_val_loss, inference_summary
 
 
-def train_model(cur, args, loss_func, model, optimizer, lr_scheduler, train_loader):
+def _split_genomic_training(args, dataset, fold):
+    """Reserve training patients for early stopping; refit scaling on fitting rows."""
+    if not hasattr(dataset, "x") or not hasattr(dataset, "df"):
+        raise ValueError("Early stopping currently supports genomic split datasets only.")
+    fraction = args.early_stopping_fraction
+    if not 0 < fraction < 1:
+        raise ValueError("early_stopping_fraction must be between 0 and 1.")
+    id_col = next((col for col in ("patient_id", "_PATIENT", "bcr_patient_barcode")
+                   if col in dataset.df), None)
+    if id_col is None or dataset.df[id_col].isna().any():
+        raise ValueError("Patient IDs are required for early stopping.")
+    patients = dataset.df[id_col].unique().copy()
+    if len(patients) < 3:
+        raise ValueError("At least 3 training patients are needed for early stopping.")
+    rng = np.random.default_rng(args.seed + fold)
+    rng.shuffle(patients)
+    count = min(len(patients) - 1, max(1, int(np.ceil(len(patients) * fraction))))
+    stop_mask = dataset.df[id_col].isin(patients[:count]).to_numpy()
+    mean = dataset.x[~stop_mask].mean(axis=0)
+    std = dataset.x[~stop_mask].std(axis=0)
+    std[std < 1e-8] = 1.0
+    splits = []
+    for mask in (~stop_mask, stop_mask):
+        split = copy.copy(dataset)
+        split.x = ((dataset.x[mask] - mean) / std).astype(np.float32)
+        split.y = dataset.y[mask].copy()
+        split.df = dataset.df.loc[mask].reset_index(drop=True).copy()
+        splits.append(split)
+    # Apply the same rescaling to the outer test dataset through the caller.
+    dataset.early_stopping_scaler = (mean, std)
+    print(f"Early stopping: {len(splits[0])} fitting rows, {len(splits[1])} monitoring rows")
+    return splits[0], splits[1]
+
+
+def _monitor_loss(model, loader, loss_func, device):
+    model.eval()
+    total, count = 0.0, 0
+    with torch.no_grad():
+        for batch in loader:
+            inputs, auxiliary, labels, _, _, _ = _parse_batch(batch)
+            inputs, labels = inputs.to(device), labels.to(device)
+            logits = model(inputs) if auxiliary is None else model(inputs, auxiliary.to(device))
+            loss = _classification_loss(loss_func, logits, labels)
+            total += float(loss.item()) * labels.size(0)
+            count += labels.size(0)
+    return total / max(count, 1)
+
+
+def train_model(cur, args, loss_func, model, optimizer, lr_scheduler, train_loader, stop_loader=None):
     """
     Simple training loop. Evaluation is handled separately after training.
     Returns training history and the final checkpoint path.
@@ -434,11 +507,16 @@ def train_model(cur, args, loss_func, model, optimizer, lr_scheduler, train_load
     model_save_dir = os.path.join(_get_result_dir(), "model_checkpoints")
     os.makedirs(model_save_dir, exist_ok=True)
     final_model_path = os.path.join(model_save_dir, f"best_model_fold_{cur}.pt")
+    history_dir = os.path.join(_get_result_dir(), args.modality, args.genomic_file_name)
+    os.makedirs(history_dir, exist_ok=True)
 
     history = {
         "train_loss": [],
         "train_cindex": [],
     }
+    if stop_loader is not None:
+        history["monitor_loss"] = []
+    best_loss, best_epoch, stale_epochs = float("inf"), -1, 0
     training_start_time = time.perf_counter()
     training_sample_count = 0
 
@@ -467,7 +545,7 @@ def train_model(cur, args, loss_func, model, optimizer, lr_scheduler, train_load
                 logits = model(x_batch)
             else:
                 logits = model(x_batch, aux_batch)
-            loss = loss_func(logits, y_batch.long())
+            loss = _classification_loss(loss_func, logits, y_batch)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
@@ -498,14 +576,35 @@ def train_model(cur, args, loss_func, model, optimizer, lr_scheduler, train_load
             f"train_loss={train_loss:.4f}, train_cindex={train_cindex:.4f}"
         )
 
+        if stop_loader is not None:
+            monitor_loss = _monitor_loss(model, stop_loader, loss_func, device)
+            history["monitor_loss"].append(monitor_loss)
+            print(f"[Fold {cur}] monitoring loss={monitor_loss:.4f}")
+            if np.isfinite(monitor_loss) and monitor_loss < best_loss - args.early_stopping_min_delta:
+                best_loss, best_epoch, stale_epochs = monitor_loss, epoch_idx, 0
+                torch.save(model.state_dict(), final_model_path)
+            else:
+                stale_epochs += 1
+
         # Convert history dict to a DataFrame before saving to CSV
-        pd.DataFrame(history).to_csv(os.path.join(model_save_dir, f"training_history_fold_{cur}.csv"), index=False)
+        pd.DataFrame(history).to_csv(os.path.join(history_dir, f"training_history_fold_{cur}.csv"), index=False)
 
-    torch.save(model.state_dict(), final_model_path)
-    print(f"[Fold {cur}] Final model saved to: {final_model_path}")
+        if stop_loader is not None and stale_epochs >= args.early_stopping_patience:
+            print(f"[Fold {cur}] Early stopping at epoch {epoch_idx + 1}; best epoch {best_epoch + 1}")
+            break
 
-    total_cindex = history["train_cindex"][-1] if history["train_cindex"] else 0.0
-    total_loss = history["train_loss"][-1] if history["train_loss"] else 0.0
+    if stop_loader is None:
+        torch.save(model.state_dict(), final_model_path)
+    elif best_epoch < 0:
+        raise ValueError("No finite monitoring loss; no valid checkpoint was selected.")
+    else:
+        model.load_state_dict(torch.load(final_model_path, map_location=device, weights_only=True))
+    history["selected_epoch"] = [best_epoch + 1 if stop_loader is not None else len(history["train_loss"])] * len(history["train_loss"])
+    pd.DataFrame(history).to_csv(os.path.join(history_dir, f"training_history_fold_{cur}.csv"), index=False)
+    print(f"[Fold {cur}] Selected model saved to: {final_model_path}")
+
+    total_cindex = history["train_cindex"][best_epoch if stop_loader is not None else -1] if history["train_cindex"] else 0.0
+    total_loss = history["train_loss"][best_epoch if stop_loader is not None else -1] if history["train_loss"] else 0.0
     training_time_seconds, training_time_per_sample_seconds = calculate_training_time(
         training_start_time,
         device,

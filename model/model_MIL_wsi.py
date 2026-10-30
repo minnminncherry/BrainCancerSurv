@@ -34,7 +34,12 @@ class MILWSI(nn.Module):
 
         self.classifier = nn.Linear(hidden_dim, self.n_classes)
 
-    def forward(self, x, return_attention=False):
+    def forward(self, x, return_attention=False, return_features=False,
+                return_tokens=False, mask_padding=True):
+        """Return logits, pooled features, or attention-weighted patch tokens.
+
+        return_tokens preserves the patch axis for downstream cross-attention.
+        """
         if not torch.is_tensor(x):
             raise TypeError("MILWSI input must be a torch.Tensor.")
 
@@ -43,19 +48,28 @@ class MILWSI(nn.Module):
             x = x.unsqueeze(0)
         if x.dim() != 3:
             raise ValueError("Expected input shape [num_patches, input_dim] or [batch, num_patches, input_dim].")
+        if x.size(-1) != self.input_dim:
+            raise ValueError(f"Expected {self.input_dim} features per WSI patch.")
 
         valid_patches = x.abs().sum(dim=-1) > 0
+        if x.size(1) == 0 or (mask_padding and (~valid_patches.any(dim=1)).any()):
+            raise ValueError("Each WSI bag needs at least one nonzero patch.")
         patch_features = self.patch_encoder(x)
         attention_scores = self.attention(patch_features).squeeze(-1)
-        attention_scores = attention_scores.masked_fill(~valid_patches, -1e9)
+        if mask_padding:
+            attention_scores = attention_scores.masked_fill(~valid_patches, -1e9)
         attention_weights = F.softmax(attention_scores, dim=1)
 
-        bag_features = torch.sum(patch_features * attention_weights.unsqueeze(-1), dim=1)
-        logits = self.classifier(bag_features)
+        weighted_tokens = patch_features * attention_weights.unsqueeze(-1)
+        if return_tokens:
+            output = weighted_tokens
+        else:
+            bag_features = weighted_tokens.sum(dim=1)
+            output = bag_features if return_features else self.classifier(bag_features)
 
         if return_attention:
-            return logits, attention_weights
-        return logits
+            return output, attention_weights
+        return output
     
     def captum(self, wsi):
         logits = self.forward(wsi)

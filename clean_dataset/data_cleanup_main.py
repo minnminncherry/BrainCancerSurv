@@ -203,8 +203,7 @@ def main(args1, args2=None, args3=None):
             mutation_cls.extract_zip_file(mutat_input_dir, "gz")
 
     elif(args1 == 'EXTRACT_MAF_MUTATION_FILE_GENERATE_CSV'):
-        mutation_cls.create_gene_mutation_file(final_genomic_data_file_name,'gene_mutation.csv')
-
+            mutation_cls.create_gene_mutation_file(final_genomic_data_file_name,f'gene_{args2}_mutation.csv')
     else:
         print("Invalid arguments provided")
 

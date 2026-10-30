@@ -110,11 +110,23 @@ class GenomicMutation:
             raise
 
     def create_gene_mutation_file(self, output_file_path, output_file_name):
-        maf_files = []
-        for root, _, files in os.walk(self.output_dir):
-            for file in files:
-                if file.lower().endswith(".maf"):
-                    maf_files.append(os.path.join(root, file))
+        functional_variants = [
+            "Missense_Mutation",
+            "Nonsense_Mutation",
+            "Frame_Shift_Del",
+            "Frame_Shift_Ins",
+            "In_Frame_Del",
+            "In_Frame_Ins",
+            "Splice_Site",
+            "Translation_Start_Site",
+            "Nonstop_Mutation",
+        ]
+        maf_files = [
+            os.path.join(root, file)
+            for root, _, files in os.walk(self.output_dir)
+            for file in files if file.lower().endswith(".maf")
+        ]
+        required_columns = {"Tumor_Sample_Barcode", "Hugo_Symbol", "Mutation_Status", "Variant_Classification"}
 
         mutation_frames = []
         for maf_file in maf_files:
@@ -122,12 +134,19 @@ class GenomicMutation:
             if maf.empty:
                 continue
 
-            if "Tumor_Sample_Barcode" not in maf.columns or "Hugo_Symbol" not in maf.columns:
+            if not required_columns.issubset(maf.columns):
                 raise ValueError(f"Missing required columns in MAF file: {maf_file}")
 
-            patient_ids = (maf["Tumor_Sample_Barcode"].astype(str).str.split("-").str[:3].str.join("-"))
+            mut = maf[
+                (maf["Mutation_Status"] == "Somatic") &
+                (maf["Variant_Classification"].isin(functional_variants))
+            ]
+            if mut.empty:
+                continue
+
+            patient_ids = (mut["Tumor_Sample_Barcode"].astype(str).str.split("-").str[:3].str.join("-"))
             mutation_frames.append(
-                pd.DataFrame({"patient_id": patient_ids, "gene": maf["Hugo_Symbol"]})
+                pd.DataFrame({"patient_id": patient_ids, "gene": mut["Hugo_Symbol"]})
             )
 
         if not mutation_frames:
@@ -135,7 +154,9 @@ class GenomicMutation:
 
         mutations = pd.concat(mutation_frames, ignore_index=True).dropna().drop_duplicates()
         cleaned_data = (mutations.assign(mutated=1)
-            .pivot_table(index="patient_id", columns="gene", values="mutated", aggfunc="max", fill_value=0)
+            .pivot(index="patient_id", columns="gene", values="mutated")
+            .fillna(0)
+            .astype(int)
             .reset_index()
         )
         cleaned_data.columns.name = None
@@ -148,4 +169,3 @@ class GenomicMutation:
 
         cleaned_data.to_csv(output_path, index=False)
         return cleaned_data
-

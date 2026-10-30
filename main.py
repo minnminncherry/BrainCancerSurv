@@ -11,8 +11,9 @@ from utils.core_utils import _train_val, save_final_fold_summary
 
 def main(args, dataset_class):
 
-    # prepartaion for 5 fold cv study
-    folds = 5
+    folds = args.n_folds
+    if not 2 <= folds <= len(dataset_class.metadata):
+        raise ValueError("n_folds must be between 2 and the number of patients.")
     model_paths = []
     fold_metrics = []
 
@@ -96,7 +97,8 @@ if __name__ == "__main__":
         "batch_size": args.batch_size,
         "num_workers": args.num_workers,
         "mri_dir": args.mri_dir,
-        "mri_file_name": args.mri_file_name
+        "mri_file_name": args.mri_file_name,
+        "crop_size": args.crop_size,
     }
     valid_args = signature(dataset_class.__init__).parameters
     dataset_args = {key: value for key, value in dataset_args.items() if key in valid_args}

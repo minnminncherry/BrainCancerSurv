@@ -22,10 +22,13 @@ def _get_split_loader(args, split_dataset, training=False, testing=False, weight
     
     if args.modality in ["mlp", "snn", "gen2vec", "resmlp", "resnet_mlp"]:
         collate_fn = _collate_genomic
+    elif args.modality == "ViT":
+        collate_fn = _collate_mri
+        batch_size = args.batch_size
     elif args.modality in ["mil","transmil"]:
         collate_fn = _collate_wsi
         batch_size = args.batch_size
-    elif args.modality in ["multimodal_late_fusion"]:
+    elif args.modality in ["multimodal_late_fusion", "multimodal_cross_attention"]:
         collate_fn = _collate_multimodal
         batch_size = args.batch_size
     else:
@@ -64,6 +67,20 @@ def _collate_genomic(batch):
     c = torch.FloatTensor([item[3] for item in batch])
     clinical_data_list = [item[4] for item in batch]
     return omics, label, event_time, c, clinical_data_list
+
+
+def _collate_mri(batch):
+    """Pad MRI volumes to the largest dimensions in this batch."""
+    shape = [max(item[0].shape[axis] for item in batch) for axis in range(1, 4)]
+    volumes = torch.zeros((len(batch), 1, *shape), dtype=torch.float32)
+    for i, item in enumerate(batch):
+        volume = item[0]
+        depth, height, width = volume.shape[1:]
+        volumes[i, :, :depth, :height, :width] = volume
+    labels = torch.tensor([item[1] for item in batch], dtype=torch.long)
+    times = torch.tensor([item[2] for item in batch], dtype=torch.float32)
+    censorship = torch.tensor([item[3] for item in batch], dtype=torch.float32)
+    return volumes, labels, times, censorship, [item[4] for item in batch]
 
 
 def _collate_wsi(batch):

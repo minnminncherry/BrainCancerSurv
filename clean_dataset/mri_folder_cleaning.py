@@ -2,6 +2,7 @@ import pymysql
 import yaml
 import pandas as pd
 import os
+import re
 
 class MRIDataCleaner:
     def __init__(self, file):
@@ -28,47 +29,59 @@ class MRIDataCleaner:
             self.conn.close()
             print("Database connection closed")
     
-    def load_filename_to_db(self, folder_path, table_name):
-        """Load MRI filenames from the folder into the database table"""
+    def  load_filename_to_db(self, folder_path, table_name):
+        """Insert NIfTI metadata from patient folders into the MRI table."""
         if not self.conn:
             print("No database connection. call connect_db() first.")
             return
 
+        truncate_query = f"TRUNCATE TABLE {table_name};"
+        with self.conn.cursor() as cursor:
+            cursor.execute(truncate_query)
+        self.conn.commit()
+        print(f"Table {table_name} truncated successfully.")
+
+        rows = []
+        for patient_id in os.listdir(folder_path):
+            patient_folder = os.path.join(folder_path, patient_id)
+            if not os.path.isdir(patient_folder):
+                continue
+
+            for root, _, files in os.walk(patient_folder):
+                for file_name in files:
+                    if not file_name.lower().endswith((".nii", ".nii.gz")):
+                        continue
+
+                    name = file_name[:-7] if file_name.lower().endswith(".nii.gz") else file_name[:-4]
+                    parts = name.split("_")
+                    if len(parts) < 3:
+                        continue
+
+                    scan_date = parts[1]
+                    modality = parts[2].upper()
+                    is_mask = (
+                        "glistrboost" in file_name.lower()
+                        or "glisterboots" in file_name.lower()
+                    )
+                    rows.append((patient_id, scan_date, modality, file_name, root, is_mask))
+
+        if not rows:
+            print("No matching MRI files found.")
+            return
+
+        sql = (
+            f"INSERT INTO `{table_name}` "
+            "(patient_id, scan_date, modality, file_name, folder_path, is_mask) "
+            "VALUES (%s, %s, %s, %s, %s, %s)"
+        )
         try:
             with self.conn.cursor() as cursor:
-                truncate_qry = f"TRUNCATE TABLE {table_name};"
-                cursor.execute(truncate_qry)
-
-                sql = (
-                    f"INSERT INTO {table_name} "
-                    "(patient_id, study_id, series_id, image_name, folder_path) "
-                    "VALUES (%s, %s, %s, %s, %s)"
-                )
-
-                inserted_count = 0
-                for patient_id in os.listdir(folder_path):
-                    patient_folder = os.path.join(folder_path, patient_id)
-
-                    print("Processing patient:", patient_id)
-                    for root, _, files in os.walk(patient_folder):
-                        image_files = [f for f in files if not f.startswith(".")]
-                        if not image_files:
-                            continue
-
-                        relative_parts = os.path.relpath(root, patient_folder).split(os.sep)
-                        study_id = relative_parts[0] if relative_parts[0] != "." else ""
-                        series_id = os.path.basename(root)
-
-                        for image_name in image_files:
-                            # print(f"Inserting: {patient_id}, {study_id}, {series_id}, {image_name}, {os.path.join(root, image_name)}")
-                            cursor.execute(sql, (patient_id, study_id, series_id, image_name, root))
-                            inserted_count += 1
-
-                self.conn.commit()
-            print(f"Filenames loaded into database successfully. Total rows: {inserted_count}")
+                cursor.executemany(sql, rows)
+            self.conn.commit()
+            print(f"MRI filenames loaded successfully. Total rows: {len(rows)}")
         except Exception as e:
-            print(f"Error loading filenames into database: {e}")
             self.conn.rollback()
+            print(f"Error loading filenames into database: {e}")
 
     def generate_csv_from_db(self, table_name, output_csv_path):
         """Generate a CSV file from the database table"""
@@ -77,7 +90,7 @@ class MRIDataCleaner:
             return
 
         try:
-            query = f"SELECT * FROM {table_name};"
+            query = f"SELECT * FROM {table_name} where is_mask = 0;"
             df = pd.read_sql(query, self.conn)
             df.to_csv(output_csv_path, index=False)
             print(f"CSV file generated successfully at: {output_csv_path}")
