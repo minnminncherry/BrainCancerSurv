@@ -24,9 +24,9 @@ CUDA_VISIBLE_DEVICES=0 python "$REPO_ROOT/main.py" \
     --n_classes 4 \
     --loss_func "cross_entropy" \
     --opt "adam" \
-    --lr 1e-4 \
+    --lr 5e-4 \
     --batch_size 4 \
-    --num_workers 2 \
-    --epoch 10 \
+    --num_workers 0 \
+    --epoch 20 \
     --wsi_feature_dim 1024 \
     --resmlp_hidden_dim 256

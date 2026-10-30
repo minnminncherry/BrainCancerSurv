@@ -5,6 +5,7 @@ from data_normalization import DataNormalization_genomic_data
 from clean_genomic_data import GenomicDataCleaner
 from WSI_folder_cleaning import WSIDataCleaner
 from mri_folder_cleaning import MRIDataCleaner
+from clean_mutation_data import GenomicMutation
 import os
 import yaml
 import shutil
@@ -33,6 +34,9 @@ def main(args1, args2=None, args3=None):
         wsi_new_file_path = os.path.abspath(os.path.join(script_dir, data['WSI_file_path']['gbm_wsi_new_file_path']))
         mri_input_dir = os.path.abspath(os.path.join(script_dir, data['MRI_file_path']['gbm_mri_input_file_path']))
         wsi_pt_dir = os.path.abspath(os.path.join(script_dir, data['WSI_file_path']['gbm_wsi_pt_file_path']))
+        mri_metadata_file_path = os.path.abspath(os.path.join(script_dir, data['MRI_file_path']['gbm_mri_metadata_file_path']))
+        mutat_input_dir = os.path.abspath(os.path.join(script_dir, data['Mutation_file_path']['gbm_input_file_path']))
+        mutat_output_dir = os.path.abspath(os.path.join(script_dir, data['Mutation_file_path']['gbm_output_file_path']))
     
     elif (args2 == 'lgg'):
         input_dir = data['lgg_src_file_paths']['genomic_data_dir']
@@ -47,7 +51,11 @@ def main(args1, args2=None, args3=None):
         wsi_final_file_path = os.path.abspath(os.path.join(script_dir, data['WSI_file_path']['lgg_wsi_final_file_path']))
         wsi_new_file_path = os.path.abspath(os.path.join(script_dir, data['WSI_file_path']['lgg_wsi_new_file_path']))
         mri_input_dir = os.path.abspath(os.path.join(script_dir, data['MRI_file_path']['lgg_mri_input_file_path']))
+        mri_metadata_file_path = os.path.abspath(os.path.join(script_dir, data['MRI_file_path']['lgg_mri_metadata_file_path']))
         wsi_pt_dir = os.path.abspath(os.path.join(script_dir, data['WSI_file_path']['lgg_wsi_pt_file_path']))
+        mutat_input_dir = os.path.abspath(os.path.join(script_dir, data['Mutation_file_path']['gbm_input_file_path']))
+        mutat_output_dir = os.path.abspath(os.path.join(script_dir, data['Mutation_file_path']['gbm_output_file_path']))
+
     else:
         print("Invalid cancer type provided. Please specify 'gbm' or 'lgg'.")
         return
@@ -55,11 +63,13 @@ def main(args1, args2=None, args3=None):
     gen_cls = GenomicDataCleaner(input_dir, output_dir)
     wsi_cls = WSIDataCleaner(wsi_final_file_path)
     mri_cls = MRIDataCleaner(mri_input_dir)
+    mutation_cls = GenomicMutation(mutat_input_dir, mutat_output_dir)
 
     if args1 != 'TEXT_TO_CSV':
         gen_cls.connect_db(db_name)
         wsi_cls.connect_db(db_name)
         mri_cls.connect_db(db_name)
+        mutation_cls.connect_db(db_name)
 
     # Connect to database
     if(args1 == 'INSERT_METADATA_JSON_DATA'):
@@ -181,6 +191,19 @@ def main(args1, args2=None, args3=None):
         if mri_cls.conn:
             mri_cls.load_filename_to_db(mri_input_dir, "raw_patient_info_MRI")
 
+    elif(args1 == 'GENERATE_MRI_METADATA_CSV'):
+        if mri_cls.conn:
+            if args2 == 'gbm':
+                mri_cls.generate_csv_from_db("raw_patient_info_MRI", os.path.join(mri_metadata_file_path, "gbm_mri_metadata.csv"))
+            elif args2 == 'lgg':
+                mri_cls.generate_csv_from_db("raw_patient_info_MRI", os.path.join(mri_metadata_file_path, "lgg_mri_metadata.csv"))
+
+    elif(args1 == 'COLLECT_AND_TRANSFORM_ZIP_MUTATION'):
+        if mutation_cls.conn:
+            mutation_cls.extract_zip_file(mutat_input_dir, "gz")
+
+    elif(args1 == 'EXTRACT_MAF_MUTATION_FILE_GENERATE_CSV'):
+            mutation_cls.create_gene_mutation_file(final_genomic_data_file_name,f'gene_{args2}_mutation.csv')
     else:
         print("Invalid arguments provided")
 

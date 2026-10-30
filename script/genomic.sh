@@ -19,8 +19,14 @@ CUDA_VISIBLE_DEVICES=0 python "$REPO_ROOT/main.py" \
     --modality "resmlp" \
     --n_classes 4 \
     --loss_func "cross_entropy" \
+    --resmlp_hidden_dim 128 \
+    --resmlp_num_blocks 2 \
+    --encoder_dropout 0.3 \
+    --reg 1e-4 \
+    --early_stopping_patience 5 \
+    --early_stopping_fraction 0.2 \
     --opt "adam"\
-    --lr 3e-4 \
+    --lr 1e-4 \
     --batch_size 20 \
     --num_workers 2 \
     --epoch 30

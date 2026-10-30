@@ -5,13 +5,15 @@ from inspect import signature
 from dataset.SurvivalGenomicDataset import SurvivalGenomicDataset
 from dataset.SurvivalWSIDataset import SurvivalWSIDataset
 from dataset.SurvivalMultimodalDataset import SurvivalMultimodalDataset
+from dataset.SurvivalMRIDataset import SurvivalMRIDataset
 from utils.process_args import _process_args
 from utils.core_utils import _train_val, save_final_fold_summary
 
 def main(args, dataset_class):
 
-    # prepartaion for 5 fold cv study
-    folds = 5
+    folds = args.n_folds
+    if not 2 <= folds <= len(dataset_class.metadata):
+        raise ValueError("n_folds must be between 2 and the number of patients.")
     model_paths = []
     fold_metrics = []
 
@@ -29,6 +31,8 @@ def main(args, dataset_class):
             total_loss,
             val_cindex,
             val_loss,
+            training_time_seconds,
+            training_time_per_sample_seconds,
             inference_time_seconds,
             inference_time_per_sample_seconds,
         ) = metrics
@@ -40,6 +44,8 @@ def main(args, dataset_class):
                 "train_loss": total_loss,
                 "final_val_cindex": val_cindex,
                 "final_val_loss": val_loss,
+                "training_time_seconds": training_time_seconds,
+                "training_time_per_sample_seconds": training_time_per_sample_seconds,
                 "inference_time_seconds": inference_time_seconds,
                 "inference_time_per_sample_seconds": inference_time_per_sample_seconds,
                 "best_model_path": best_model_path,
@@ -50,9 +56,11 @@ def main(args, dataset_class):
     if fold_metrics:
         avg_val_cindex = float(np.mean([metric["final_val_cindex"] for metric in fold_metrics]))
         avg_val_loss = float(np.mean([metric["final_val_loss"] for metric in fold_metrics]))
+        avg_training_time = float(np.mean([metric["training_time_seconds"] for metric in fold_metrics]))
         avg_inference_time = float(np.mean([metric["inference_time_seconds"] for metric in fold_metrics]))
         print(f"\nAverage final val_cindex across {folds} folds: {avg_val_cindex:.4f}")
         print(f"Average final val_loss across {folds} folds: {avg_val_loss:.4f}")
+        print(f"Average training time across {folds} folds: {avg_training_time:.4f}s")
         print(f"Average inference time across {folds} folds: {avg_inference_time:.4f}s")
 
     print(f"\nTraining completed! All models saved to result/model_checkpoints/")
@@ -64,6 +72,7 @@ if __name__ == "__main__":
     "SurvivalGenomicDataset": SurvivalGenomicDataset,
     "SurvivalWSIDataset": SurvivalWSIDataset,
     "SurvivalMultimodalDataset": SurvivalMultimodalDataset,
+    "SurvivalMRIDataset": SurvivalMRIDataset
     }
 
     args = _process_args()
@@ -87,6 +96,9 @@ if __name__ == "__main__":
         "lr": args.lr,
         "batch_size": args.batch_size,
         "num_workers": args.num_workers,
+        "mri_dir": args.mri_dir,
+        "mri_file_name": args.mri_file_name,
+        "crop_size": args.crop_size,
     }
     valid_args = signature(dataset_class.__init__).parameters
     dataset_args = {key: value for key, value in dataset_args.items() if key in valid_args}

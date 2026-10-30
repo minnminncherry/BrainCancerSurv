@@ -166,6 +166,8 @@ class SurvivalMultimodalDataset:
 
     def __setup_metadata_and_labels(self):
         self.label_data = pd.read_csv(self.label_file)
+        self.slide_data = pd.read_csv(self.slide_file_name)
+
         if self.label_col not in self.label_data.columns:
             raise ValueError(f"Label column '{self.label_col}' not found in label file.")
 
@@ -186,22 +188,26 @@ class SurvivalMultimodalDataset:
             (c for c in self.ID_CANDIDATES if c in self.metadata.columns),
             None,
         )
+
         if self.label_id_col is None:
             raise ValueError(
                 "Cannot find an ID column in label metadata. Expected one of: "
                 "patient_id, _PATIENT, sampleID, bcr_patient_barcode."
             )
 
-        self.slide_data = pd.read_csv(self.slide_file_name)
+        def join_values(values):
+            return ";".join(values.dropna().astype(str))
+
         slide_info = (
             self.slide_data
             .groupby("patient_id")
             .agg(
-                svs_filename=("svs_filename", "first"),
+                slide_ids=("svs_filename", join_values),
                 n_slides=("patient_id", "size"),
             )
             .reset_index()
         )
+
         self.metadata = self.metadata.merge(
             slide_info,
             left_on=self.label_id_col,
@@ -209,7 +215,7 @@ class SurvivalMultimodalDataset:
             how="left",
         ).drop(columns=["patient_id"])
 
-        self.metadata["slide_ids"] = self.metadata.get("slide_ids", "")
+        self.metadata["slide_ids"] = self.metadata["slide_ids"].fillna("")
         self.metadata["n_slides"] = self.metadata["n_slides"].fillna(0).astype(int)
 
     def __build_censorship(self, metadata):
@@ -225,9 +231,6 @@ class SurvivalMultimodalDataset:
         if "days_to_death" in metadata.columns:
             has_death_day = pd.to_numeric(metadata["days_to_death"], errors="coerce").notna()
             censorship[has_death_day] = 0
-        if "days_to_last_followup" in metadata.columns:
-            has_followup = pd.to_numeric(metadata["days_to_last_followup"], errors="coerce").notna()
-            censorship[censorship.isna() & has_followup] = 1
 
         return censorship.fillna(0.0)
 
@@ -241,12 +244,6 @@ class SurvivalMultimodalDataset:
             retbins=True,
         )
         self.survival_bin_edges = np.asarray(bin_edges, dtype=np.float32)
-        if getattr(bins, "isna", None) is not None and bins.isna().any():
-            bad_count = int(bins.isna().sum())
-            raise ValueError(
-                f"Discretization produced {bad_count} NaN bin(s). "
-                "This usually means there are too few unique values for the requested n_classes."
-            )
         return bins.astype("int64").values.ravel()
 
     def __return_splits(self, split_key, fold_indices=None, scalar=False):
@@ -300,6 +297,11 @@ class SurvivalMultimodalDataset:
                 raise ValueError("Feature columns do not match fitted scaler feature columns.")
             x = (x - scaler_to_use["mean"].astype(np.float32)) / scaler_to_use["std"].astype(np.float32)
 
+
+        split_df = split_df.drop(columns=['sampleID', 'CDE_DxAge', 'CDE_survival_days', 'CDE_vital_status','_INTEGRATION','bcr_patient_barcode','_primary_site', 'bcr_patient_uuid',
+                                                  'days_to_death', 'days_to_last_followup','days_to_new_tumor_event_after_initial_treatment', 'gender','vital_status',
+                                                   'year_of_initial_pathologic_diagnosis'], errors='ignore')
+            
         patch_data = []
         if self.pt_dir:
             for _, row in split_df.iterrows():
@@ -307,8 +309,12 @@ class SurvivalMultimodalDataset:
                 sample_slides = self.slide_data[self.slide_data["patient_id"] == patient_id]
                 if sample_slides.empty:
                     raise FileNotFoundError(f"No WSI slide metadata found for patient: {patient_id}")
-                svs_file = sample_slides.iloc[0]["svs_filename"]
-                pt_file = os.path.join(self.pt_dir, os.path.splitext(svs_file)[0] + ".pt")
+                slide_row = sample_slides.iloc[0]
+                if "pt_filename" in slide_row and pd.notna(slide_row["pt_filename"]):
+                    pt_filename = slide_row["pt_filename"]
+                else:
+                    pt_filename = os.path.splitext(slide_row["svs_filename"])[0] + ".pt"
+                pt_file = os.path.join(self.pt_dir, pt_filename)
                 patch_data.append({"pt_file": pt_file})
         else:
             raise ValueError("SurvivalMultimodalDataset requires pt_dir for multimodal training.")

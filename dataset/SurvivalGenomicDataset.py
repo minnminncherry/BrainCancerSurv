@@ -21,18 +21,20 @@ class SurvivalGenomicSplitDataset(Dataset):
     def __getitem__(self, idx):
         idx = int(idx)
         row = self.df.iloc[idx]
-        omics_tensor = torch.from_numpy(self.x[idx])
-        label = int(self.y[idx])
+        omics_tensor = torch.from_numpy(self.x[idx]).float()
+        label = torch.tensor(self.y[idx], dtype=torch.long)
         event_time = float(pd.to_numeric(row.get("CDE_survival_time", row.get("survival_months", 0.0)), errors="coerce"))
 
         c_col = next(
             (c_name for c_name in SurvivalGenomicDataset.CENSOR_CANDIDATES if c_name in self.df.columns),
             None,
         )
+
         c = pd.to_numeric(row[c_col], errors="coerce") if c_col is not None else 0.0
-        c = 0.0 if pd.isna(c) else float(c)
+        c = torch.tensor(c, dtype=torch.float32)
+        # c = 0.0 if pd.isna(c) else float(c)
         clinical_data = row.to_dict()
-        return (torch.zeros((1, 1), dtype=torch.float32), omics_tensor, label, event_time, c, clinical_data)
+        return  omics_tensor, label, event_time, c, clinical_data
 
 class SurvivalGenomicDataset:
     ID_CANDIDATES = ("patient_id", "_PATIENT", "sampleID", "bcr_patient_barcode")
