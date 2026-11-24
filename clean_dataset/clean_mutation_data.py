@@ -74,6 +74,7 @@ class GenomicMutation:
 
         extension = file_exten if file_exten.startswith(".") else f".{file_exten}"
         os.makedirs(self.output_dir, exist_ok=True)
+        print(f"Extracting files from {base_path} to {self.output_dir} with extension {extension}")
         extracted_files = []
 
         try:

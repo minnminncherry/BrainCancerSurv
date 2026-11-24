@@ -8,7 +8,7 @@ The research compares individual data modalities with genomic–WSI fusion to ex
 
 Clinical records provide survival times and censoring information. Most experiments convert survival times into four quantile-based classes, ordered from shorter to longer survival. Models output class logits, and a derived risk score is used to calculate the concordance index (C-index).
 
-The current training objectives are cross-entropy or sigmoid binary cross-entropy with one-hot class targets. These are survival-time classification objectives; they do not directly optimize a censor-aware survival likelihood. Censoring is used when calculating C-index.
+Training supports cross-entropy, sigmoid binary cross-entropy with one-hot targets, and `NLLSurvLoss` (`--loss_func nll_surv`). The first two are classification objectives. NLLSurvLoss optimizes a discrete-time likelihood that uses censoring labels (1 = censored, 0 = observed death); its logits represent interval hazards. Censoring is also used when calculating C-index.
 
 | Input | Models | Purpose |
 |---|---|---|
@@ -118,14 +118,14 @@ To run cross-attention fusion, change the modality in `script/fusion.sh`:
 
 Use `--n_folds` to control cross-validation; the default is five folds. MRI currently has an explicit four-fold setting in its script. Check the scripts for the currently selected GBM/LGG cohort and optimizer settings.
 
-The genomic ResMLP script includes a smaller model, dropout, weight decay, and patient-grouped inner monitoring for early stopping. It restores the checkpoint with the best monitoring loss before evaluating the outer held-out fold. These controls reduce overfitting risk but do not guarantee improved generalization.
+The genomic ResMLP script includes a smaller model, dropout, and weight decay. Training runs for the configured number of epochs and evaluates the final checkpoint on the held-out fold. These controls reduce overfitting risk but do not guarantee improved generalization.
 
 ## Results and visualization
 
 Training writes:
 
 - `result/<model>/<dataset>/summary.csv`: per-fold training and held-out loss/C-index, plus mean results.
-- `result/<model>/<dataset>/training_history_fold_<fold>.csv`: epoch histories; early-stopping runs also include monitoring loss and the selected epoch.
+- `result/<model>/<dataset>/training_history_fold_<fold>.csv`: epoch histories and the final selected epoch.
 - `result/split_<model>_<dataset>_<fold>_predictions.csv`: held-out class predictions, probabilities, and risk scores.
 - `result/model_checkpoints/`: saved model weights and prediction artifacts.
 - `result/comparisons/`: exported figures and comparison tables.
@@ -163,3 +163,43 @@ The GitHub Actions workflow installs CPU PyTorch, checks dependency consistency 
 python -m pip install 'pytest>=8,<9'
 python -m pytest tests -q
 ```
+
+### Censor-aware late-fusion training
+
+`script/fusion.sh` uses `--loss_func nll_surv`. ResMLP and attention MIL produce normalized embeddings, which are concatenated and projected before predicting hazard logits. For multimodal experiments, eligible clinical/genomic/WSI patients are matched and deduplicated before fold construction. Time-bin boundaries for NLL are fitted using observed events in the training fold and saved as `survival_bin_edges_fold_<fold>.npy`.
+
+NLL prediction CSVs include hazards, survival curves, and `survival_tail_probability`. For compatibility, `prob_class_*` columns contain interval event masses; these sum to `1 - survival_tail_probability`, not necessarily 1. C-index risk is the negative sum of predicted survival probabilities. `correct` reports label/prediction equality for every row. `event_bin_observed` is false for censored follow-up bins, which are not known death classes; use this flag or censorship to restrict event-bin accuracy to observed deaths. Loss magnitudes from NLL and cross-entropy should not be compared directly. Retrain after switching objectives; existing classification checkpoints and historical plots do not establish survival-model performance.
+
+## Mutation prediction dataset and head
+
+`SurvivalMutationDataset` prepares a separate multi-label mutation task: gene-expression values are inputs, and recorded binary mutation flags are targets. Clinical survival labels are not required. This dictionary-based dataset is not registered with the survival-only `main.py` loop.
+
+```python
+import torch
+from torch.utils.data import DataLoader
+from dataset.SurvivalMutationDataset import SurvivalMutationDataset
+from model.mutation_head import MutationPredictionHead
+
+data = SurvivalMutationDataset(
+    "dataset_csv/genomic_data/normalized_zscore_gbm.csv",
+    "dataset_csv/genomic_data/filter_gene_gbm_mutation.csv",
+    target_genes=["IDH1", "TP53", "EGFR", "PTEN"],
+)
+train, validation, scaler = data.return_splits(validation_fraction=0.2)
+loader = DataLoader(train, batch_size=16, shuffle=True)
+head = MutationPredictionHead(data.input_dim, data.n_targets)
+criterion = torch.nn.BCEWithLogitsLoss(pos_weight=train.positive_weights())
+optimizer = torch.optim.Adam(head.parameters(), lr=1e-4, weight_decay=1e-4)
+
+# One training step; repeat over batches/epochs for an experiment.
+batch = next(iter(loader))
+optimizer.zero_grad()
+logits = head(batch["expression"])
+loss = criterion(logits, batch["mutation"])
+loss.backward()
+optimizer.step()
+```
+
+The head can alternatively accept a learned genomic embedding by setting `input_dim` to that embedding's dimension. At inference, apply `logits.sigmoid()` for one probability per target gene in `data.mutation_gene_cols` order; softmax is inappropriate because multiple genes can be mutated together.
+
+Patients are matched by ID, duplicates are rejected, and missing mutation labels are not converted to negatives. Additional scaling is fitted on training patients only, although pre-existing normalization in source CSVs remains. Inspect `train.target_statistics()` for genes lacking either mutation class. A zero target means no recorded mutation, not confirmed assay coverage. This preparation and the one-step example do not establish mutation-prediction performance.

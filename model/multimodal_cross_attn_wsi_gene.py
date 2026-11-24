@@ -1,8 +1,9 @@
 import torch
 import torch.nn as nn
+from model.out_survival_head import SurvivalPredictionHead
 
-from model.model_resnet_mlp_gene import ResMLPGenomics
-from model.model_MIL_wsi import MILWSI
+from model.gene_resnet_mlp_model import ResMLPGenomics
+from model.wsi_MIL_model import MILWSI
 
 
 class MultimodalCrossAttention(nn.Module):
@@ -36,7 +37,7 @@ class MultimodalCrossAttention(nn.Module):
         )
         self.classifier = nn.Sequential(
             nn.LayerNorm(hidden_dim * 2), nn.Dropout(dropout),
-            nn.Linear(hidden_dim * 2, n_classes),
+            SurvivalPredictionHead(hidden_dim * 2, n_classes),
         )
 
     def forward(self, genomic_data, wsi_data, return_attention=False):

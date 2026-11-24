@@ -3,8 +3,9 @@ import os
 import numpy as np
 from inspect import signature
 from dataset.SurvivalGenomicDataset import SurvivalGenomicDataset
+from dataset.SurvivalMultimodalMRIGeneDataset import SurvivalMultimodalMRIGeneDataset
 from dataset.SurvivalWSIDataset import SurvivalWSIDataset
-from dataset.SurvivalMultimodalDataset import SurvivalMultimodalDataset
+from dataset.SurvivalMultimodalWSIGeneDataset import SurvivalMultimodalWSIGeneDataset
 from dataset.SurvivalMRIDataset import SurvivalMRIDataset
 from utils.process_args import _process_args
 from utils.core_utils import _train_val, save_final_fold_summary
@@ -71,8 +72,9 @@ if __name__ == "__main__":
     DATASET_FACTORY = {
     "SurvivalGenomicDataset": SurvivalGenomicDataset,
     "SurvivalWSIDataset": SurvivalWSIDataset,
-    "SurvivalMultimodalDataset": SurvivalMultimodalDataset,
-    "SurvivalMRIDataset": SurvivalMRIDataset
+    "SurvivalMultimodalWSIGeneDataset": SurvivalMultimodalWSIGeneDataset,
+    "SurvivalMRIDataset": SurvivalMRIDataset,
+    "SurvivalMultimodalMRIGeneDataset": SurvivalMultimodalMRIGeneDataset
     }
 
     args = _process_args()

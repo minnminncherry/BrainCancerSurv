@@ -1,16 +1,53 @@
 database:
   user: 
   pass: 
-  database_name: 
+  database_name_gbm: 
+  database_name_lgg: 
 mysql_file_paths: 
+lgg_src_file_paths:
+  clinical_data: 
+  wsi_images_dir: 
+  genomic_data_dir: 
+  genomic_metadata_file_name: 
+lgg_clean_file_paths:
+  genomic_data_dir: 
+  final_genomic_data_file_name: 
 gbm_src_file_paths:
   clinical_data: 
-  wsi_images: 
-  genomic_data: 
+  wsi_images_dir: 
+  genomic_data_dir: 
+  genomic_metadata_file_name: 
 gbm_clean_file_paths: 
-  genomic_data: 
-pathway_file_path:
+  genomic_data_dir: 
+  final_genomic_data_file_name: 
+pathway_src_file_path:
   hallmark_pathway: 
   reactome_pathway: 
+pathway_clean_file_path:
+  hallmark_pathway_matrix_output_file: 
+  reactome_pathway_matrix_output_file: 
 model_save_path: 
+WSI_file_path:
+  gbm_wsi_input_file_path: 
+  gbm_wsi_new_file_path: 
+  gbm_wsi_h5_file_path: 
+  gbm_wsi_metadata_file_path: 
+  gbm_wsi_final_file_path: 
+  gbm_wsi_pt_file_path: 
+  lgg_wsi_h5_file_path: 
+  lgg_wsi_new_file_path: 
+  lgg_wsi_input_file_path: 
+  lgg_wsi_metadata_file_path: 
+  lgg_wsi_final_file_path: 
+  lgg_wsi_pt_file_path: 
+MRI_file_path:
+  gbm_mri_input_file_path: 
+  lgg_mri_input_file_path: 
+  gbm_mri_metadata_file_path: 
+  lgg_mri_metadata_file_path: 
+Mutation_file_path:
+  gbm_input_file_path: 
+  gbm_output_file_path: 
+  lgg_input_file_path: 
+  lgg_output_file_path: 
 

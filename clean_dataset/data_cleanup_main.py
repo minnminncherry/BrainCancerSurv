@@ -53,8 +53,8 @@ def main(args1, args2=None, args3=None):
         mri_input_dir = os.path.abspath(os.path.join(script_dir, data['MRI_file_path']['lgg_mri_input_file_path']))
         mri_metadata_file_path = os.path.abspath(os.path.join(script_dir, data['MRI_file_path']['lgg_mri_metadata_file_path']))
         wsi_pt_dir = os.path.abspath(os.path.join(script_dir, data['WSI_file_path']['lgg_wsi_pt_file_path']))
-        mutat_input_dir = os.path.abspath(os.path.join(script_dir, data['Mutation_file_path']['gbm_input_file_path']))
-        mutat_output_dir = os.path.abspath(os.path.join(script_dir, data['Mutation_file_path']['gbm_output_file_path']))
+        mutat_input_dir = os.path.abspath(os.path.join(script_dir, data['Mutation_file_path']['lgg_input_file_path']))
+        mutat_output_dir = os.path.abspath(os.path.join(script_dir, data['Mutation_file_path']['lgg_output_file_path']))
 
     else:
         print("Invalid cancer type provided. Please specify 'gbm' or 'lgg'.")
@@ -200,6 +200,7 @@ def main(args1, args2=None, args3=None):
 
     elif(args1 == 'COLLECT_AND_TRANSFORM_ZIP_MUTATION'):
         if mutation_cls.conn:
+            print(f"mutat_input_dir: {mutat_input_dir}, mutat_output_dir: {mutat_output_dir}")
             mutation_cls.extract_zip_file(mutat_input_dir, "gz")
 
     elif(args1 == 'EXTRACT_MAF_MUTATION_FILE_GENERATE_CSV'):

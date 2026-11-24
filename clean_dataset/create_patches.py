@@ -1,7 +1,6 @@
 import cv2
 import numpy as np
 
-from utils.core_utils import encoder
 
 class WSISegementation:
     def __init__(self):
@@ -16,17 +15,17 @@ class WSISegementation:
     def reduce_res_threadshold(self, img, seg_range, outlier_thred=7 ,thred_back=255):
         dimen = img.level_dimensions
 
-        #downsample 
+        #downsample
         img = np.array(img.read_region((0,0), seg_range, dimen[seg_range]))
         img_hsv = cv2.cvtColor(img, cv2.COLOR_RGB2HSV)  # Convert to HSV space
         img_med = cv2.medianBlur(img_hsv[:,:,1], outlier_thred)  # Apply median blurring
 
         # otsu is automatically threadsholding
         img_otsu = cv2.threshold(img_med, 0, thred_back, cv2.THRESH_OTSU+cv2.THRESH_BINARY)
-        
+
         return img_otsu
-    
-    # Calculate the downsample paramter and filtering the contour and bounging box 
+
+    # Calculate the downsample paramter and filtering the contour and bounging box
     def downsample_contour(self, slide_img, img_otsu, patch_size=512):
         print("Original Dimension : ", slide_img.level_dimensions)
         filter_params = {
@@ -36,7 +35,7 @@ class WSISegementation:
         }
         level_downsamples = []
 
-        
+
         # level of dimension is largest is full resolution and the 1st is downsamples resolution and second is another downsamples resoultion
         # e.g. ((15349, 23597), (3837, 5899), (1918, 2949))
 
@@ -46,13 +45,12 @@ class WSISegementation:
             estimated_downsample = (dim_0[0]/float(dim[0]), dim_0[1]/float(dim[1]))
             level_downsamples.append(estimated_downsample) if estimated_downsample != (downsample, downsample) else level_downsamples.append((downsample, downsample))
 
-        # print("Down Sampling image : ", level_downsamples)
         self.level_downsample = level_downsamples
         self.level_downsamples = level_downsamples
 
         # tissue segmentation foltering to determines whcih contrours are large enough to be consider tissue and which ones are small artifacts or noise
         mask_level = len(slide_img.level_dimensions) - 1
-        # Get the last 
+        # Get the last
         downsample_x, downsample_y = self.level_downsample[mask_level]
         print(f"downsample X : {downsample_x}, downsample Y : {downsample_y}")
 
@@ -71,7 +69,7 @@ class WSISegementation:
         if hierarchy is None:
             return [], []
         hierarchy = np.squeeze(hierarchy, axis=(0,))[:, 2:]
-        
+
         # find and filter contours
         foreground_controur, hole_contours = self.filter_contour(contours, hierarchy, filter_params)
         self.contour = foreground_controur
@@ -110,7 +108,7 @@ class WSISegementation:
             hole_contours.append(valid_holes)
 
         return foreground_contours, hole_contours
-        
+
     def generate_patch_coord(self, patch_size=512, stride=None, mask_level=None):
         if self.contour is None:
             raise ValueError("Please run downsample_contour() before generate_patch_coord().")
@@ -144,25 +142,9 @@ class WSISegementation:
                     patch_coords.append((level0_x, level0_y))
 
         patch_coords = sorted(set(patch_coords))
-        
+
         print("Patch size : ", patch_size)
         print("Patch stride : ", stride)
         print("Count of Patch Coordination : ", len(patch_coords))
 
         return patch_coords
-    
-    # def WSI_format_change_h5(self, patch_coord, output_file, table_name="map_wsi_filepath"):
-    #     # Save patch coordinates to a .h5 file for faster downstream loading.
-    #     if self.level_downsamples is None:
-    #         raise ValueError("Missing level downsample values. Please run downsample_contour() first.")
-
-    #     torch.save(
-    #         {
-    #             "patch_coords": torch.tensor(patch_coord, dtype=torch.long),
-    #             "patch_size": int(patch_size),
-    #             "level": 0,
-    #             "num_patches": int(len(patch_coord)),
-    #         },
-    #         str(output_file),
-    #     )
-    #     print(f"Saved patch coordinates to {output_file} with {len(patch_coord)} tissue patches")

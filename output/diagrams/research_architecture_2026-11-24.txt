@@ -1,0 +1,25 @@
+Research architecture reference — supplied by the user on 2026-11-24
+Image: research_architecture_2026-11-24.drawio.png
+Original: /home/licongcong/Downloads/My_proposed_method_overview.drawio.png
+
+This is the latest user-provided research architecture reference as of this date.
+Keep earlier architecture images as historical versions. Saving this reference
+is not an implementation change or confirmation that current code matches it.
+
+Visible architecture:
+- Gene expression -> ResMLP -> genomic embedding.
+- MRI -> patching -> image encoder -> MRI embedding.
+- WSI -> patching -> image encoder -> WSI embedding.
+- Separate gene-guided MRI and gene-guided WSI cross-attention branches.
+- Each branch has a mutation head and a survival head.
+- The diagram routes branch-head outputs through concatenation to a final
+  survival prediction.
+- Binary mutation tables are shown connected to the mutation heads.
+
+Implementation interpretation to preserve from earlier user instructions:
+Mutation labels are training supervision, not inference inputs. Distinguish
+predicted mutation probabilities from reference binary mutation labels.
+The new drawing does not specify encoder dimensions, Q/K/V assignments, losses,
+or the exact representation each head supplies to concatenation. These details
+must be checked against future implementation instructions rather than inferred
+from this saved reference alone.

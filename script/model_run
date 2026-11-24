@@ -1,0 +1,58 @@
+Model need to run
+GBM
+Only Genomic Resmlp using NULLLOSS 
+Only Genomic MLP using NULLLOSS
+Only Genomic Gen2vec using NULLOSS
+Only Genomic SNN using NULLOSS
+Only Genomic Resmlp using CrossEntropy 
+Only Genomic MLP using CrossEntropy
+Only Genomic Gen2vec using CrossEntropy
+Only Genomic SNN using CrossEntropy
+
+Only WSI MIL using NULLLOSS
+Only WSI TransMIL using NULLOSS
+Only WSI MIL using CrossEntropy
+Only WSI TransMIL using CrossEntropy
+
+Only MRI ViT using NULLLOSS
+Only MRI 3DCNN using NULLOSS
+Only MRI ViT using CrossEntropy
+Only MRI 3DCNN using CrossEntropy
+
+Multimodal GENE +  WSI (gene guided wsi) late fusion using NULLLOSS
+Multimodal GENE +  WSI (gene guided wsi) cross attention using NULLLOSS
+Multimodal GENE +  WSI (gene guided wsi) late fusion using CrossEntropy
+Multimodal GENE +  WSI (gene guided wsi) cross attention using CrossEntropy
+Multimodal GENE +  MRI (gene guided MRI) late fusion using NULLLOSS
+Multimodal GENE +  MRI (gene guided MRI) cross attention using NULLLOSS
+Multimodal GENE +  MRI (gene guided MRI) late fusion using CrossEntropy
+Multimodal GENE +  MRI (gene guided MRI) cross attention using CrossEntropy
+
+LGG
+Only Genomic Resmlp using NULLLOSS 
+Only Genomic MLP using NULLLOSS
+Only Genomic Gen2vec using NULLOSS
+Only Genomic SNN using NULLOSS
+Only Genomic Resmlp using CrossEntropy 
+Only Genomic MLP using CrossEntropy
+Only Genomic Gen2vec using CrossEntropy
+Only Genomic SNN using CrossEntropy
+
+Only WSI MIL using NULLLOSS
+Only WSI TransMIL using NULLOSS
+Only WSI MIL using CrossEntropy
+Only WSI TransMIL using CrossEntropy
+
+Only MRI ViT using NULLLOSS
+Only MRI 3DCNN using NULLOSS
+Only MRI ViT using CrossEntropy
+Only MRI 3DCNN using CrossEntropy
+
+Multimodal GENE +  WSI (gene guided wsi) late fusion using NULLLOSS
+Multimodal GENE +  WSI (gene guided wsi) cross attention using NULLLOSS
+Multimodal GENE +  WSI (gene guided wsi) late fusion using CrossEntropy
+Multimodal GENE +  WSI (gene guided wsi) cross attention using CrossEntropy
+Multimodal GENE +  MRI (gene guided MRI) late fusion using NULLLOSS
+Multimodal GENE +  MRI (gene guided MRI) cross attention using NULLLOSS
+Multimodal GENE +  MRI (gene guided MRI) late fusion using CrossEntropy
+Multimodal GENE +  MRI (gene guided MRI) cross attention using CrossEntropy

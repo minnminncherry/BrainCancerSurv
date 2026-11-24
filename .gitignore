@@ -19,3 +19,7 @@ result/
 
 # config file
 config.yaml
+
+# running files
+*.log
+runs/

@@ -2,10 +2,10 @@
 import pytest
 import torch
 
-from model.model_MIL_wsi import MILWSI
-from model.late_fusion import MultimodalLateFusion
-from model.cross_attn import MultimodalCrossAttention
-from model.model_ViT import ViTMRI
+from model.wsi_MIL_model import MILWSI
+from model.multimodal_late_fusion_wsi_gene import MultimodalLateFusion
+from model.multimodal_cross_attn_wsi_gene import MultimodalCrossAttention
+from model.mri_ViT_model import ViTMRI
 
 
 def test_mil_ignores_padded_patches():
@@ -42,3 +42,4 @@ def test_mri_transformer_volume_backward():
     torch.nn.functional.cross_entropy(logits, torch.tensor([0, 1])).backward()
     assert volume.grad is not None and torch.isfinite(volume.grad).all()
     assert model.transformer.layers[0].self_attn.in_proj_weight.grad is not None
+

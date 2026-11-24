@@ -2,13 +2,12 @@ import pymysql
 import yaml
 import pandas as pd
 import os
-import re
 
 class MRIDataCleaner:
     def __init__(self, file):
         self.conn = None
         data = yaml.safe_load(file)
-    
+
     def connect_db(self, database_name):
         """Establish database connection"""
         try:
@@ -22,13 +21,13 @@ class MRIDataCleaner:
         except Exception as e:
             print(f"Error connecting to database: {e}")
             self.conn = None
-    
+
     def disconnect_db(self):
         """Close database connection"""
         if self.conn:
             self.conn.close()
             print("Database connection closed")
-    
+
     def  load_filename_to_db(self, folder_path, table_name):
         """Insert NIfTI metadata from patient folders into the MRI table."""
         if not self.conn:
