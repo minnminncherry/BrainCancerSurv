@@ -8,7 +8,8 @@ class ViTMRI(nn.Module):
     """3D patch embeddings, spatial positions, and Transformer survival classification."""
 
     def __init__(self, input_dim=1024, n_classes=4, hidden_dim=128,
-                 dropout=0.3, patch_size=32, num_layers=2, num_heads=4):
+                 dropout=0.3, patch_size=32, num_layers=2, num_heads=4,
+                 n_mutation_targets=0):
         super().__init__()
         if hidden_dim % num_heads:
             raise ValueError("hidden_dim must be divisible by num_heads.")
@@ -42,6 +43,7 @@ class ViTMRI(nn.Module):
             nn.Linear(hidden_dim // 2, 1),
         )
         self.classifier = nn.Sequential(nn.Dropout(dropout), SurvivalPredictionHead(hidden_dim, self.n_classes))
+        self.mutation_head = nn.Linear(hidden_dim, n_mutation_targets) if n_mutation_targets else None
 
     def _encode_tokens(self, x):
         """Encode positioned patches while retaining their spatial sequence."""
@@ -102,4 +104,8 @@ class ViTMRI(nn.Module):
         """Return logits; optional attention contains final pooling weights, not self-attention."""
         features, weights = self.forward_features(x, return_attention=True)
         logits = self.classifier(features)
+        if self.mutation_head is not None:
+            logits = {"survival_logits": logits,
+                      "mri_mutation_logits": self.mutation_head(features),
+                      "mri_embedding": features}
         return (logits, weights) if return_attention else logits

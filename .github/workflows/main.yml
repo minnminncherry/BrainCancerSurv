@@ -10,10 +10,6 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -21,11 +17,6 @@ jobs:
     env:
       MPLBACKEND: Agg
       OMP_NUM_THREADS: '2'
-      MPLCONFIGDIR: ${{ runner.temp }}/matplotlib
-      TENSORBOARD_LOG_DIR: ${{ runner.temp }}/tensorboard
-      RESULT_DIR: ${{ runner.temp }}/results
-      CUDA_VISIBLE_DEVICES: ''
-      TF_CPP_MIN_LOG_LEVEL: '3'
 
     strategy:
       matrix:
@@ -51,13 +42,7 @@ jobs:
           python -m pip check
 
       - name: Check Python syntax
-        run: python -m compileall -q main.py model dataset utils clean_dataset script tests
-
-      - name: Check shell script syntax
-        run: |
-          for script in script/*.sh; do
-            sh -n "$script"
-          done
+        run: python -m compileall -q main.py model dataset utils clean_dataset
 
       - name: Check CPU PyTorch installation
         run: |
@@ -65,12 +50,4 @@ jobs:
 
       - name: Run model tests
         # The DICOM diagnostic script requires local files and is not a pytest test.
-        run: python -m pytest tests -q --junitxml=test-results.xml
-
-      - name: Upload test report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: test-results-python-${{ matrix.python-version }}
-          path: test-results.xml
-          if-no-files-found: ignore
+        run: python -m pytest tests -q

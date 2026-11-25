@@ -37,6 +37,28 @@ def _save_pkl(filename, save_object):
     with open(filename, "wb") as writer:
         pickle.dump(save_object, writer)
 
+def save_genomic_bundle(args, model, train_dataset, fold, output_dir):
+    factory = args.data_factory
+    scaler = factory.scaler_
+    state = {key: value.detach().cpu() for key, value in model.state_dict().items()}
+    mode = 'mutation' if model.mutation_head is not None else 'without_mutation'
+    id_col = next(c for c in factory.ID_CANDIDATES if c in train_dataset.df)
+    bundle = dict(state_dict=state, source_file=args.genomic_file_name, fold=fold,
+        loss_func=args.loss_func, label_col=args.label_col,
+        feature_cols=list(scaler['feature_cols']), mean=scaler['mean'].tolist(),
+        std=scaler['std'].tolist(), bin_edges=factory.survival_bin_edges.tolist(),
+        training_patient_ids=train_dataset.df[id_col].astype(str).unique().tolist(),
+        mutation_genes=list(getattr(factory, 'mutation_gene_cols', [])) if model.mutation_head is not None else [],
+        model_config=dict(input_dim=model.input_dim, n_classes=model.n_classes,
+            hidden_dim=model.input_projection[1].out_features,
+            num_blocks=len(model.residual_blocks), dropout=model.input_projection[3].p,
+            n_mutation_targets=model.mutation_head.out_features if model.mutation_head is not None else 0))
+    path = os.path.join(output_dir, f'genomic_fold_{fold}_{mode}_bundle.pt')
+    os.makedirs(output_dir, exist_ok=True)
+    torch.save(bundle, path)
+    return path
+
+
 def _train_val(args, train_dataset, test_dataset, cur):
 
     # Patient splits already exist. Attach targets/masks and establish gene order
@@ -66,7 +88,6 @@ def _train_val(args, train_dataset, test_dataset, cur):
         train_loader,
     )
     if isinstance(model, ResMLPGenomics):
-        from utils.genomic_external import save_genomic_bundle
         bundle_dir = os.path.join(_get_result_dir(), args.modality, args.genomic_file_name)
         print(f"Saved external-test bundle: {save_genomic_bundle(args, model, train_dataset, cur, bundle_dir)}")
     eval_results, final_val_cindex, final_val_loss, inference_summary = _evaluate_classification(
@@ -280,9 +301,13 @@ def _init_model(args):
                            n_classes=classes, hidden_dim=256, dropout=dropout(0.2 if is_mil else 0.5))
     if args.modality == "ViT":
         return ViTMRI(input_dim=int(getattr(args, "mri_feature_dim", 1024)),
-                      n_classes=classes, hidden_dim=128, dropout=dropout(0.3), num_layers=2)
+                      n_classes=classes, hidden_dim=128, dropout=dropout(0.3), num_layers=2,
+                      n_mutation_targets=len(getattr(args.data_factory, "mutation_gene_cols", []))
+                      if getattr(args, "mutation_file", None) else 0)
     if args.modality == "3dcnn":
-        return CNN3DMRI(n_classes=classes, hidden_dim=128, dropout=dropout(0.3))
+        return CNN3DMRI(n_classes=classes, hidden_dim=128, dropout=dropout(0.3),
+                        n_mutation_targets=len(getattr(args.data_factory, "mutation_gene_cols", []))
+                        if getattr(args, "mutation_file", None) else 0)
 
     # Model class, default hidden size, block count, dropout, and whether WSI is used.
     fusion_models = {
@@ -430,6 +455,23 @@ def _evaluate_classification(args,cur, model, val_loader, loss_func, checkpoint_
                     patient_results[case_id]["hazards"] = hazards[0].cpu().numpy()
                     patient_results[case_id]["survival"] = survival[0].cpu().numpy()
                 clinical = clinical_data_list[batch_idx]
+
+                # for MRI data 
+                if "volume_ml" in clinical:
+                    measured_volume = clinical["volume_ml"]
+                    known = pd.notna(measured_volume)
+                    volume_metadata = {
+                        "volume_ml": float(measured_volume) if known else None,
+                        "tumor_volume_available": bool(known),
+                    }
+                    for field in ("scan_date", "image_path", "mask_path", "mask_type", "region", "included_labels"):
+                        if field in clinical:
+                            value = clinical[field]
+                            volume_metadata[field] = value if pd.notna(value) else None
+                    row.update(volume_metadata)
+                    patient_results[case_id].update(volume_metadata)
+
+                # for mutation-guided training, add per-gene labels and probabilities to the output rows
                 if "mutation_targets" in clinical:
                     for gene, target, known in zip(args.data_factory.mutation_gene_cols,
                                                    clinical["mutation_targets"], clinical["mutation_mask"]):
@@ -514,7 +556,7 @@ def train_model(cur, args, loss_func, model, optimizer, lr_scheduler, train_load
     training_start_time = time.perf_counter()
     training_sample_count = 0
     mutation_mode = "mutation" if isinstance(model, MutationGuidedSurvival) or (
-        isinstance(model, ResMLPGenomics) and model.mutation_head is not None
+        getattr(model, "mutation_head", None) is not None
     ) else "without_mutation"
     start_tensorboard(args, cur, mutation_mode)
 

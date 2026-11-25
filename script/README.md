@@ -161,3 +161,53 @@ Without a mutation file, mutation preparation clears any old target schema and
 masks, and ResMLP keeps its survival-only output. `SurvivalMutationDataset` itself
 also supports an independent expression-to-mutation dataset; it is not used as
 the survival dataset factory in `genomic.sh`.
+
+Calculate MRI mask-region volumes without database access:
+
+```bash
+python clean_dataset/data_cleanup_main.py CALCULATE_MRI_TUMOR_VOLUMES gbm
+python clean_dataset/data_cleanup_main.py CALCULATE_MRI_TUMOR_VOLUMES lgg
+```
+
+`MRIDataCleaner.calculate_tumor_volumes` reads the MRI metadata and saves
+`dataset_csv/mri_data/gbm_tumor_volumes.csv` or `lgg_tumor_volumes.csv` using the
+configured metadata directory. It prefers manually corrected GlistrBoost masks,
+checks MRI/mask geometry and millimetre units, and measures native-space voxels.
+`volume_ml` includes all positive mask labels, which may include edema. Per-label
+volumes are also saved; confirm dataset label definitions before reporting tumor
+compartments. There is one output row per patient and scan date, not per sequence.
+CSV source paths are tried first, with the configured patient-folder root as a
+fallback. Original metadata, masks, and MRI images are not modified.
+
+`SurvivalMRIDataset.load_tumor_volume_data()` reads only an explicit filename,
+provided through `--tumor_volume_file` (or the dataset constructor). `mri.sh` passes
+`dataset_csv/mri_data/<cohort>_tumor_volumes.csv`; override it with the CLI option or
+`TUMOR_VOLUME_FILE`. Set `TUMOR_VOLUME_FILE=''` to omit volume measurements. It
+matches patient ID and scan date (not patient ID alone) and preserves MRI samples
+without a measurement. Each sample's clinical dictionary contains raw `volume_ml`,
+a float32 `tumor_volume` tensor with shape `[1]`, and `tumor_volume_available`.
+The tensor uses zero only as a missing-value placeholder when its availability
+flag is false; measured zero remains available. No volume scaling is fitted on
+validation data. These fields do not alter the image-only forward pass: using
+volume as an auxiliary model input or target requires an explicit model change.
+The quantity is the full positive-mask region and may include edema, as recorded
+in the volume CSV. Ground-truth mask volume is not a model-predicted volume.
+
+Standalone MRI ViT and 3D-CNN now support optional mutation supervision:
+
+```bash
+# Survival only
+sh script/mri.sh GBM ViT nll_surv
+# Survival + mutation supervision (use LGG paths for LGG runs)
+sh script/mri.sh GBM ViT nll_surv --mutation_file dataset_csv/genomic_data/filter_gene_gbm_mutation.csv --mutation_genes IDH1 TP53
+sh script/mri.sh GBM 3dcnn nll_surv --mutation_file dataset_csv/genomic_data/filter_gene_gbm_mutation.csv --mutation_genes IDH1 TP53
+```
+
+The existing MRI embedding feeds a separate optional linear mutation head.
+Mutation labels are supervision, not model inputs; unknown labels are masked.
+The objective adds `mri_mutation_weight` (default 1) times the mutation BCE to
+survival loss. CSV outputs contain `mri_mutation_prob_<gene>` and use the
+`_mutation_predictions.csv` suffix. Without `--mutation_file`, output remains
+survival logits and files use `_without_mutation_predictions.csv`. TensorBoard
+and histories identify both modes. Mask-derived volume remains reference
+metadata and is not a predicted volume or an input to these heads.

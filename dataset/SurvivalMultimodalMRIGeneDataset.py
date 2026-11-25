@@ -85,7 +85,7 @@ class SurvivalMultimodalMRIGeneDataset(SurvivalMRIDataset):
         mri = pd.read_csv(mri_file_name)
         mri["patient_id"] = mri["patient_id"].astype(str).str.strip()
         # Keep MRI scans and remove segmentation masks.
-        is_mask = mri["file_name"].str.contains("GlisterBoots", case=False, na=False)
+        is_mask = mri["file_name"].str.contains("glistrboost|glisterboots", case=False, na=False)
         if "is_mask" in mri:
             is_mask |= mri["is_mask"].astype(str).str.lower().isin({"1", "1.0", "true"})
         mri = mri.loc[~is_mask].copy()

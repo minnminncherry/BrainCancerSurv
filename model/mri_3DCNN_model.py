@@ -18,7 +18,7 @@ class MRIConv3d(nn.Conv3d):
 class CNN3DMRI(nn.Module):
     """Encode MRI volumes [B, 1, D, H, W] and return survival logits."""
 
-    def __init__(self, n_classes=4, hidden_dim=128, dropout=0.3):
+    def __init__(self, n_classes=4, hidden_dim=128, dropout=0.3, n_mutation_targets=0):
         super().__init__()
         self.n_classes = n_classes
         layers = []
@@ -37,6 +37,7 @@ class CNN3DMRI(nn.Module):
         self.classifier = nn.Sequential(
             nn.Dropout(dropout), SurvivalPredictionHead(hidden_dim, n_classes),
         )
+        self.mutation_head = nn.Linear(hidden_dim, n_mutation_targets) if n_mutation_targets else None
 
     def forward_features(self, x):
         """Return a patient embedding [B, hidden_dim]."""
@@ -46,7 +47,13 @@ class CNN3DMRI(nn.Module):
 
     def forward(self, x):
         # Keep raw logits; the survival loss converts them into hazards.
-        return self.classifier(self.forward_features(x))
+        features = self.forward_features(x)
+        logits = self.classifier(features)
+        if self.mutation_head is not None:
+            return {"survival_logits": logits,
+                    "mri_mutation_logits": self.mutation_head(features),
+                    "mri_embedding": features}
+        return logits
 
     def forward_tokens(self, x):
         """Return 64 spatial MRI tokens [B, 64, hidden_dim] for attention."""

@@ -44,6 +44,7 @@ def _process_args():
     # Support both names used in scripts.
     parser.add_argument("--mri_dir", type=str, help="MRI photo data dir")
     parser.add_argument("--mri_file_name", type=str, help="MRI metadata file name")
+    parser.add_argument("--tumor_volume_file", type=str, help="Optional tumor-volume CSV matched by patient ID and scan date.")
     parser.add_argument("--crop_size", type=int, nargs=3, default=None, help="Optional MRI center crop: slices height width.")
     parser.add_argument("--type_of_pathway", "--type_of_path", dest="type_of_pathway", type=str, default="hallmark")
     return parser.parse_args()
