@@ -1,3 +1,5 @@
+"""Load MRI volumes and prepare patient-level survival splits."""
+
 import os
 import numpy as np
 import pandas as pd
@@ -6,7 +8,7 @@ import torch
 from torch.utils.data import Dataset
 
 def _get_result_dir():
-    return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "result"))
+    return os.path.abspath(os.environ.get("RESULT_DIR") or os.path.join(os.path.dirname(__file__), "..", "result"))
 
 class SurvivalMRISplitDataset(Dataset):
     def __init__(self, x, y, df, load_volume, transform=None):
@@ -20,61 +22,56 @@ class SurvivalMRISplitDataset(Dataset):
         return len(self.y)
 
     def __getitem__(self, idx):
-        row = self.df.iloc[int(idx)]
-        volume = self.load_volume(self.mri_paths[int(idx)])
+        idx = int(idx)
+        row = self.df.iloc[idx]
+        volume = self.load_volume(self.mri_paths[idx])
         if self.transform is not None:
             volume = self.transform(volume)
+        clinical = row.to_dict()
+        measured_volume = row.get("volume_ml", np.nan)
+        known = pd.notna(measured_volume)
+        # Available for an auxiliary input/target; not appended to MRI voxels.
+        clinical["tumor_volume"] = torch.tensor(
+            [float(measured_volume) if known else 0.0], dtype=torch.float32
+        )
+        clinical["tumor_volume_available"] = bool(known)
         return (
             volume,
-            int(self.y[int(idx)]),
+            int(self.y[idx]),
             float(row["event_time"]),
             float(row["censorship"]),
-            row.to_dict(),
+            clinical,
         )
-
 
 class SurvivalMRIDataset:
 
     D_CANDIDATES = ("patient_id", "_PATIENT", "bcr_patient_barcode")
 
-    def __init__(
-        self,
-        label_file,
-        mri_file_name,
-        seed,
-        label_col,
-        n_bins,
-        n_classes=4,
-        h5_dir=None,
-        mri_dir=None,
-        modality="ViT",
-        opt="adam",
-        lr=1e-3,
-        batch_size=32,
-        num_workers=0,
-        crop_size=None,
-        ):
-        self.label_file = label_file
-        self.mri_file_name = mri_file_name
-        self.seed = seed
-        self.label_col = label_col
-        self.n_bins = n_bins
+    def __init__(self, label_file, mri_file_name, seed, label_col, n_bins,
+                 n_classes=4, h5_dir=None, mri_dir=None, modality="ViT",
+                 opt="adam", lr=1e-3, batch_size=32, num_workers=0, crop_size=None,
+                 tumor_volume_file=None):
+        self.label_file, self.mri_file_name = label_file, mri_file_name
+        self.seed, self.label_col, self.n_bins = seed, label_col, n_bins
         self.n_classes = int(n_classes)
-        self.h5_dir = h5_dir
-        self.mri_dir = mri_dir
-        self.modality = modality
-        self.opt = opt
-        self.lr = lr
-        self.batch_size = int(batch_size)
-        self.num_workers = int(num_workers)
+        self.h5_dir, self.mri_dir = h5_dir, mri_dir
+        self.modality, self.opt, self.lr = modality, opt, lr
+        self.batch_size, self.num_workers = int(batch_size), int(num_workers)
         self.crop_size = crop_size
-    
-        self.__setup_metadata_and_labels()
+        self.tumor_volume_file = None
+        self._load_metadata()
+        self.load_tumor_volume_data(tumor_volume_file)
 
-
-    def __setup_metadata_and_labels(self):
+    def _load_metadata(self):
         self.label_data = pd.read_csv(self.label_file)
         self.mri_data = pd.read_csv(self.mri_file_name)
+        # Metadata includes segmentation masks for volume analysis, not MRI inputs.
+        is_mask = self.mri_data["file_name"].str.contains(
+            "glistrboost|glisterboots", case=False, na=False
+        )
+        if "is_mask" in self.mri_data:
+            is_mask |= self.mri_data["is_mask"].astype(str).str.lower().isin({"1", "1.0", "true"})
+        self.mri_data = self.mri_data.loc[~is_mask].copy()
         self.label_id_col = next(
             col for col in self.D_CANDIDATES if col in self.label_data.columns
         )
@@ -90,26 +87,54 @@ class SurvivalMRIDataset:
         self.label_data[self.label_col] = pd.to_numeric(
             self.label_data[self.label_col], errors="coerce"
         )
-        self.label_data = self.label_data.dropna(subset=[self.label_col])
-        self.label_data = self.label_data.drop_duplicates(self.label_id_col)
+        self.label_data = self.label_data.dropna(subset=[self.label_col]).drop_duplicates(self.label_id_col)
 
         # Keep one metadata row per patient so all scans stay in the same fold.
         patients = self.mri_data[["patient_id"]].drop_duplicates()
-        print(f"Loaded {len(patients)} and {len(self.mri_data[['patient_id']])} patients with MRI metadata.")
-        print(f"Loaded {len(self.label_data)} patients with clinical labels.")
         self.metadata = self.label_data.merge(
             patients, left_on=self.label_id_col, right_on="patient_id", how="inner"
         ).reset_index(drop=True)
 
-        print(f"Loaded {len(self.metadata)} patients with MRI and clinical labels.")
-
         if self.metadata.empty:
             raise ValueError("No patients matched the clinical labels and NIfTI metadata.")
-        
+
         self.metadata["censorship"] = self.__build_censorship(self.metadata)
         self.metadata = self.metadata[["patient_id", self.label_col, "censorship"]].copy()
-        self.mri_data = self.mri_data[["patient_id", "image_path"]].copy()
-        print(f"MRI dataset: {len(self.metadata)} patients, {len(self.mri_data)} images")
+        self.mri_data = self.mri_data[["patient_id", "scan_date", "image_path"]].copy()
+        print(f"MRI dataset: {len(self.metadata)} matched patients, {len(self.mri_data)} images in metadata")
+
+    def load_tumor_volume_data(self, filename=None):
+        """Join reference mask volumes by patient AND scan date, without dropping scans.
+
+        Raw mL and provenance remain metadata. Each split sample exposes a float32
+        tensor of shape [1] plus an availability flag in its clinical dictionary.
+        Models do not consume this value until an explicit model connection is added.
+        """
+        if not filename:
+            return
+        volumes = pd.read_csv(filename)
+        keys = ["patient_id", "scan_date"]
+        columns = keys + ["volume_ml"]
+        if not set(columns).issubset(volumes):
+            raise ValueError("Tumor volume CSV requires patient_id, scan_date, and volume_ml.")
+        volumes = volumes[columns + [c for c in ("mask_path", "mask_type", "region", "included_labels")
+                                    if c in volumes]].copy()
+        for frame in (self.mri_data, volumes):
+            if frame[keys].isna().any().any():
+                raise ValueError("Patient IDs and scan dates must be known for volume matching.")
+            frame["patient_id"] = frame["patient_id"].astype(str).str.strip()
+            frame["scan_date"] = pd.to_datetime(frame["scan_date"], errors="raise").dt.strftime("%Y-%m-%d")
+        volumes["volume_ml"] = pd.to_numeric(volumes["volume_ml"], errors="raise")
+        if not np.isfinite(volumes["volume_ml"]).all() or volumes["volume_ml"].lt(0).any():
+            raise ValueError("Tumor volumes must be finite and nonnegative in mL.")
+        if volumes.duplicated(keys).any():
+            raise ValueError("Tumor volume CSV must contain one measurement per patient and scan date.")
+        self.mri_data = self.mri_data.drop(columns=[c for c in volumes if c not in keys], errors="ignore").merge(
+            volumes, on=keys, how="left", validate="many_to_one"
+        )
+        self.tumor_volume_file = os.fspath(filename)
+        matched = self.mri_data.drop_duplicates(keys)
+        print(f"Tumor volumes: {matched.volume_ml.notna().sum()}/{len(matched)} patient scans matched.")
 
     def __build_censorship(self, metadata):
         """Return 1 for censored/living patients and 0 for observed deaths."""
@@ -124,13 +149,24 @@ class SurvivalMRIDataset:
 
         return censorship.fillna(0.0).astype("float32")
 
+    def __discritize_survival_month(self, survival_months, fit=True):
+        """Fit bins on training patients, or reuse those bins for validation."""
+        if fit:
+            _, edges = pd.qcut(survival_months, q=self.n_classes, labels=False,
+                                duplicates="drop", retbins=True)
+            if len(edges) != self.n_classes + 1:
+                raise ValueError("Too few unique training survival times for n_classes.")
+            edges[0], edges[-1] = -np.inf, np.inf
+            self.survival_bin_edges = edges
+        return pd.cut(survival_months, bins=self.survival_bin_edges,
+                      labels=False, include_lowest=True).to_numpy(dtype=np.int64)
+
     def load_mri_series(self, file_path):
         """Load one NIfTI image as a float tensor (1, D, H, W)."""
         image = nib.as_closest_canonical(nib.load(file_path))
         volume = image.get_fdata(dtype=np.float32)
         if volume.ndim != 3:
             raise ValueError(f"Expected a 3D NIfTI image: {file_path}")
-        volume = np.nan_to_num(volume, nan=0.0, posinf=0.0, neginf=0.0)
         volume = volume.transpose(2, 1, 0)  # NIfTI X/Y/Z to tensor D/H/W.
         volume = self.normalize_mri_volume(volume)
         if self.crop_size is not None:
@@ -144,10 +180,11 @@ class SurvivalMRIDataset:
         )
         foreground = volume != 0  # Foreground approximation, not skull stripping.
         values = volume[foreground]
-        if not values.size or values.std() < 1e-6:
+        std = values.std() if values.size else 0.0
+        if std < 1e-6:
             raise ValueError("MRI foreground is empty or has constant intensity.")
         normalized = np.zeros_like(volume)
-        normalized[foreground] = (values - values.mean()) / values.std()
+        normalized[foreground] = (values - values.mean()) / std
         return normalized
 
     def crop_mri_volume(self, volume, crop_size):
@@ -164,28 +201,22 @@ class SurvivalMRIDataset:
 
     def return_splits(self, args=None, fold_indices=None):
         """Split patients and fit survival quantiles on training patients only."""
+        volume_file = getattr(args, "tumor_volume_file", None)
+        if volume_file and os.fspath(volume_file) != self.tumor_volume_file:
+            self.load_tumor_volume_data(volume_file)
         test_mask = self.metadata.index.isin([] if fold_indices is None else fold_indices)
         train_df = self.metadata.loc[~test_mask].copy()
         test_df = self.metadata.loc[test_mask].copy()
         if train_df.empty:
             raise ValueError("The training split has no patients.")
 
-        _, edges = pd.qcut(
-            train_df[self.label_col], q=self.n_classes,
-            labels=False, duplicates="drop", retbins=True,
-        )
-        if len(edges) != self.n_classes + 1:
-            raise ValueError("Too few unique training survival times for n_classes.")
-        # Allow validation survival times outside the observed training range.
-        edges[0], edges[-1] = -np.inf, np.inf
-        self.survival_bin_edges = edges
+        bin_col = f"{self.label_col}_bin"
+        train_df[bin_col] = self.__discritize_survival_month(train_df[self.label_col])
+        test_df[bin_col] = self.__discritize_survival_month(test_df[self.label_col], fit=False)
         result_dir = _get_result_dir()
         os.makedirs(result_dir, exist_ok=True)
         splits = []
         for name, patient_df in (("train", train_df), ("test", test_df)):
-            patient_df[f"{self.label_col}_bin"] = pd.cut(
-                patient_df[self.label_col], bins=edges, labels=False, include_lowest=True
-            ).astype(int)
             split_df = patient_df.merge(self.mri_data, on="patient_id", how="inner")
             split_df["event_time"] = split_df[self.label_col]
             splits.append(SurvivalMRISplitDataset(

@@ -3,17 +3,13 @@ import json
 import os
 import pymysql
 import pandas as pd
-import numpy as np
-import sys
-import yaml 
-import shutil
 
 class GenomicDataCleaner:
     def __init__(self, input_dir, output_dir):
         self.input_dir = input_dir
         self.output_dir = output_dir
         self.conn = None
-    
+
     def connect_db(self, database_name):
         """Establish database connection"""
         try:
@@ -27,7 +23,7 @@ class GenomicDataCleaner:
         except Exception as e:
             print(f"Error connecting to database: {e}")
             self.conn = None
-    
+
     def disconnect_db(self):
         """Close database connection"""
         if self.conn:
@@ -37,13 +33,13 @@ class GenomicDataCleaner:
     def get_json_data(self, json_file_path):
         with open(json_file_path, 'r') as json_file:
             json_data = json.load(json_file)
-        
+
         extracted_data = []
 
         for item in json_data:
             # Get the first associated entity if it exists
             associated_entity = item.get('associated_entities', [{}])[0] if item.get('associated_entities') else {}
-            
+
             extracted_item = {
                 'submitter_id': item.get('submitter_id'),
                 'entity_submitter_id': associated_entity.get('entity_submitter_id'),
@@ -53,33 +49,33 @@ class GenomicDataCleaner:
             }
             extracted_data.append(extracted_item)
             print(f"Extracted: {extracted_item}")
-        
+
         return extracted_data
-    
+
     def insert_json_data_to_db(self, json_data, table_name):
         """Insert extracted JSON data into database table"""
         if not self.conn:
             print("No database connection. Call connect_db() first.")
             return
-        
+
         try:
             with self.conn.cursor() as cursor:
                 # Truncate table first
                 truncate_qry = f"TRUNCATE TABLE {table_name};"
                 cursor.execute(truncate_qry)
-                
+
                 # Insert data
                 sql = f"INSERT INTO {table_name} (submitter_id, entity_submitter_id, file_name, case_id, entity_id) VALUES (%s, %s, %s, %s, %s)"
-                
-                values = [(item['submitter_id'], item['entity_submitter_id'], 
-                          item['file_name'], item['case_id'], item['entity_id']) 
+
+                values = [(item['submitter_id'], item['entity_submitter_id'],
+                          item['file_name'], item['case_id'], item['entity_id'])
                          for item in json_data]
-                
+
                 cursor.executemany(sql, values)
                 self.conn.commit()
-                
+
                 print(f"Successfully inserted {len(json_data)} records into {table_name}")
-                
+
         except Exception as e:
             print(f"Error inserting data into database: {e}")
             self.conn.rollback()
@@ -128,28 +124,28 @@ class GenomicDataCleaner:
         except Exception as e:
             print(f"Error inserting TSV data into database: {e}")
             self.conn.rollback()
-        
+
     def generate_clean_genomic_data(self, out_file_path, unstranded_column='tpm_unstranded'):
         """Generate cleaned genomic data and save to output directory"""
         # This function can be implemented to read from the database, perform any necessary cleaning or transformation, and save the cleaned data to the output directory.
         date = pd.Timestamp.now().strftime("%Y-%m-%d")
-        sql = ''' SELECT 
-            a.gene_name, 
-            SUBSTRING_INDEX(c.entity_submitter_id, '-', 3) AS patient_id, 
-            SUM(a.%s) AS %s 
-        FROM raw_genomic_data a 
-        INNER JOIN raw_file_name_genomic_data b 
-            ON a.file_name = b.file_name 
-        INNER JOIN genomic_metadata_json_data c 
-            ON b.file_name = c.file_name 
-        WHERE 
+        sql = ''' SELECT
+            a.gene_name,
+            SUBSTRING_INDEX(c.entity_submitter_id, '-', 3) AS patient_id,
+            SUM(a.%s) AS %s
+        FROM raw_genomic_data a
+        INNER JOIN raw_file_name_genomic_data b
+            ON a.file_name = b.file_name
+        INNER JOIN genomic_metadata_json_data c
+            ON b.file_name = c.file_name
+        WHERE
             a.gene_id IS NOT NULL
             AND a.gene_name IS NOT NULL
             AND a.gene_name != ''
             AND a.gene_id NOT LIKE '%%PAR%%'
-        GROUP BY 
-            a.gene_name, patient_id 
-        ORDER BY 
+        GROUP BY
+            a.gene_name, patient_id
+        ORDER BY
             a.gene_name, patient_id; ''' % (unstranded_column, unstranded_column)
 
         print(sql)
@@ -171,11 +167,11 @@ class GenomicDataCleaner:
         genomic_data.rename(columns={0: 'gene_name', 1:'patient_id', 2:unstranded_column}, inplace=True)
         hallmark_df = pd.read_csv(hallmarks_data_path)
         hallmark_gene_df = hallmark_df.iloc[:, [0]]
-        
+
         df_filter = genomic_data[
             genomic_data["gene_name"].isin(hallmark_gene_df["gene"])
         ]
-        
+
         # # Calculate mean value for fill if needed
         # fill_value = genomic_data["expression"].mean() if fill_type == 'mean' else 0
 
@@ -189,7 +185,7 @@ class GenomicDataCleaner:
 
         df_pivot.to_csv(output_file_path+f"/{cancer_type}.csv", index=True)
         print(f"Transformed genomic data saved to {output_file_path}/{cancer_type}.csv")
-    
+
     def insert_file_records(self, file_records):
         """
         Insert a list of (file_name, file_path) tuples into the specified table.
@@ -208,7 +204,7 @@ class GenomicDataCleaner:
                 if file.endswith(extension):
                     records.append((file, os.path.join(root, file)))
         return records
-    
+
     @staticmethod
     def change_plain_text_file_to_csv(text_file_path, csv_file_path, delimiter='\t'):
         if not os.path.exists(text_file_path):

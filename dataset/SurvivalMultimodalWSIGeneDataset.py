@@ -2,151 +2,51 @@ import os
 import pandas as pd
 import numpy as np
 import torch
-from torch.utils.data import Dataset
+from dataset.SurvivalWSIDataset import SurvivalSplitWSIDataset, CLINICAL_COLUMNS
 
 
 def _get_result_dir():
-    return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "result"))
+    return os.path.abspath(os.environ.get("RESULT_DIR") or os.path.join(os.path.dirname(__file__), "..", "result"))
 
 
-class SurvivalMultimodalSplitDataset(Dataset):
-    def __init__(
-        self,
-        patch_data,
-        genomic_features,
-        y,
-        df,
-        feature_dim=1024,
-        pt_dir=None,
-    ):
-        self.df = df.reset_index(drop=True).copy()
-        self.y = np.asarray(y, dtype=np.int64)
-        self.patch_data = patch_data
+class SurvivalMultimodalWSIGeneSplitDataset(SurvivalSplitWSIDataset):
+    """Reuse WSI feature loading and add the patient's expression vector."""
+
+    def __init__(self, patch_data, genomic_features, y, df, feature_dim=1024, pt_dir=None):
+        super().__init__(patch_data, y, df, feature_dim, pt_dir)
         self.genomic_features = np.asarray(genomic_features, dtype=np.float32)
-        self.feature_dim = int(feature_dim)
-        self.pt_dir = pt_dir
-
-    def __len__(self):
-        return len(self.y)
-
-    def _resize_feature_dim(self, data):
-        if data.dim() == 1:
-            data = data.unsqueeze(0)
-        current_dim = data.shape[-1]
-        if current_dim == self.feature_dim:
-            return data
-        if current_dim > self.feature_dim:
-            return data[:, : self.feature_dim]
-
-        pad = torch.zeros(
-            data.shape[0],
-            self.feature_dim - current_dim,
-            dtype=data.dtype,
-            device=data.device,
-        )
-        return torch.cat([data, pad], dim=1)
 
     def _load_pt_features(self, patch_entry):
-        if isinstance(patch_entry, dict):
-            pt_file = patch_entry.get("pt_file")
-        elif isinstance(patch_entry, str):
-            pt_file = patch_entry
-        else:
+        if isinstance(patch_entry, str):
+            patch_entry = {"pt_file": patch_entry}
+        if not isinstance(patch_entry, dict):
             raise TypeError(f"Unsupported patch entry type: {type(patch_entry)}")
-
-        if not os.path.exists(pt_file):
-            raise FileNotFoundError(f"WSI feature PT file not found: {pt_file}")
-
-        load_device = "cuda" if torch.cuda.is_available() else "cpu"
-        try:
-            features = torch.load(pt_file, map_location=load_device, weights_only=True)
-        except TypeError:
-            features = torch.load(pt_file, map_location=load_device)
-
-        if isinstance(features, dict):
-            features = next(
-                (value for value in features.values() if isinstance(value, torch.Tensor)),
-                None,
-            )
-
-        if features is None:
-            raise ValueError(f"No tensor features found in PT file: {pt_file}")
-
-        if features.dim() > 2:
-            features = features.reshape(features.shape[0], -1)
-
-        return self._resize_feature_dim(features.float())
+        if not os.path.exists(patch_entry["pt_file"]):
+            raise FileNotFoundError(f"WSI feature PT file not found: {patch_entry['pt_file']}")
+        return super()._load_pt_features(patch_entry)
 
     def __getitem__(self, idx):
-        idx = int(idx)
-        if idx < 0 or idx >= len(self.y):
-            raise IndexError(f"Index out of range: {idx}")
-
-        row = self.df.iloc[idx]
-        label = int(self.y[idx])
-        event_time = pd.to_numeric(row.get("CDE_survival_time", row.get("survival_months", 0.0)), errors="coerce")
-        event_time = 0.0 if pd.isna(event_time) else float(event_time)
-        censorship = pd.to_numeric(row.get("censorship", 0.0), errors="coerce")
-        censorship = 0.0 if pd.isna(censorship) else float(censorship)
-        clinical_data = row.to_dict()
-
-        patch_entry = self.patch_data[idx]
-        if isinstance(patch_entry, dict):
-            wsi_features = self._load_pt_features(patch_entry)
-        else:
-            raise TypeError(f"Unsupported patch entry type: {type(patch_entry)}")
-
-        if wsi_features is None:
-            clinical_data["n_patches"] = 0
-            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-            wsi_features = torch.empty((0, self.feature_dim), dtype=torch.float32, device=device)
-        else:
-            clinical_data["n_patches"] = wsi_features.shape[0]
-
-        omics_tensor = torch.from_numpy(self.genomic_features[idx])
-        return wsi_features, omics_tensor, label, event_time, censorship, clinical_data
+        features, label, time, censor, clinical = super().__getitem__(idx)
+        genes = torch.from_numpy(self.genomic_features[int(idx)])
+        return features, genes, label, time, censor, clinical
 
 
-class SurvivalMultimodalDataset:
+class SurvivalMultimodalWSIGeneDataset:
     ID_CANDIDATES = ("patient_id", "_PATIENT", "sampleID", "bcr_patient_barcode")
     CENSOR_CANDIDATES = ("censorship", "censor", "event", "status")
 
-    def __init__(
-        self,
-        label_file,
-        genomic_dir,
-        genomic_file_name,
-        slide_file_name,
-        pt_dir,
-        seed,
-        label_col,
-        n_bins,
-        n_classes=4,
-        wsi_feature_dim=1024,
-        modality="multimodal_late_fusion",
-        opt="adam",
-        lr=1e-3,
-        batch_size=32,
-        num_workers=0,
-        type_of_pathway="hallmark",
-    ):
-        self.label_file = label_file
-        self.genomic_dir = genomic_dir
-        self.genomic_file_name = genomic_file_name
-        self.slide_file_name = slide_file_name
-        self.pt_dir = pt_dir
-        self.seed = seed
-        self.label_col = label_col
-        self.n_bins = n_bins
-        self.n_classes = int(n_classes)
+    def __init__(self, label_file, genomic_dir, genomic_file_name, slide_file_name,
+                 pt_dir, seed, label_col, n_bins, n_classes=4, wsi_feature_dim=1024,
+                 modality="multimodal_late_fusion", opt="adam", lr=1e-3,
+                 batch_size=32, num_workers=0, type_of_pathway="hallmark"):
+        self.label_file, self.slide_file_name = label_file, slide_file_name
+        self.genomic_dir, self.genomic_file_name = genomic_dir, genomic_file_name
+        self.pt_dir, self.seed, self.label_col = pt_dir, seed, label_col
+        self.n_bins, self.n_classes = n_bins, int(n_classes)
         self.wsi_feature_dim = int(wsi_feature_dim)
-        self.modality = modality
-        self.opt = opt
-        self.lr = lr
-        self.batch_size = int(batch_size)
-        self.num_workers = int(num_workers)
+        self.modality, self.opt, self.lr = modality, opt, lr
+        self.batch_size, self.num_workers = int(batch_size), int(num_workers)
         self.type_of_pathway = type_of_pathway
-
         self.__setup_genomic_data()
         self.__setup_metadata_and_labels()
 
@@ -213,15 +113,27 @@ class SurvivalMultimodalDataset:
             left_on=self.label_id_col,
             right_on="patient_id",
             how="left",
-        ).drop(columns=["patient_id"])
+        )
+        if self.label_id_col != "patient_id":
+            self.metadata = self.metadata.drop(columns=["patient_id"])
 
         self.metadata["slide_ids"] = self.metadata["slide_ids"].fillna("")
         self.metadata["n_slides"] = self.metadata["n_slides"].fillna(0).astype(int)
+        # Finalize eligible unique patients before main.py constructs fold indices.
+        self.metadata = self.metadata[
+            (self.metadata["n_slides"] > 0)
+            & self.metadata[self.label_id_col].isin(self.genomic_df[self.genomic_id_col])
+            & self.metadata["censorship"].notna()
+        ].drop_duplicates(self.label_id_col).reset_index(drop=True)
+        self.labels = self.metadata["__label"].to_numpy(dtype=np.int64)
+        if self.genomic_df[self.genomic_id_col].duplicated().any():
+            raise ValueError("Resolve duplicate genomic patient IDs before multimodal training.")
+
 
     def __build_censorship(self, metadata):
         status_col = next((c for c in ("CDE_vital_status", "vital_status") if c in metadata.columns), None)
         if status_col is None:
-            return pd.Series(np.zeros(len(metadata), dtype=np.float32), index=metadata.index)
+            raise ValueError("Clinical vital status is required to derive censoring.")
 
         status = metadata[status_col].astype(str).str.strip().str.upper()
         censorship = pd.Series(np.nan, index=metadata.index, dtype="float32")
@@ -232,7 +144,7 @@ class SurvivalMultimodalDataset:
             has_death_day = pd.to_numeric(metadata["days_to_death"], errors="coerce").notna()
             censorship[has_death_day] = 0
 
-        return censorship.fillna(0.0)
+        return censorship
 
     def __discretize_survival_month(self, survival_months):
         n_quantiles = max(2, int(self.n_classes))
@@ -273,7 +185,7 @@ class SurvivalMultimodalDataset:
                 f"No rows matched between label '{self.label_id_col}' and genomic '{self.genomic_id_col}'."
             )
 
-        feature_cols = [c for c in self.genomic_df.columns if c != self.genomic_id_col]
+        feature_cols = self.genomic_feature_cols
         x = split_df[feature_cols].apply(pd.to_numeric, errors="coerce").to_numpy(dtype=np.float32)
         if np.isnan(x).any():
             bad = int(np.isnan(x).sum())
@@ -298,40 +210,36 @@ class SurvivalMultimodalDataset:
             x = (x - scaler_to_use["mean"].astype(np.float32)) / scaler_to_use["std"].astype(np.float32)
 
 
-        split_df = split_df.drop(columns=['sampleID', 'CDE_DxAge', 'CDE_survival_days', 'CDE_vital_status','_INTEGRATION','bcr_patient_barcode','_primary_site', 'bcr_patient_uuid',
-                                                  'days_to_death', 'days_to_last_followup','days_to_new_tumor_event_after_initial_treatment', 'gender','vital_status',
-                                                   'year_of_initial_pathologic_diagnosis'], errors='ignore')
-            
-        patch_data = []
-        if self.pt_dir:
-            for _, row in split_df.iterrows():
-                patient_id = row[self.label_id_col]
-                sample_slides = self.slide_data[self.slide_data["patient_id"] == patient_id]
-                if sample_slides.empty:
-                    raise FileNotFoundError(f"No WSI slide metadata found for patient: {patient_id}")
-                slide_row = sample_slides.iloc[0]
-                if "pt_filename" in slide_row and pd.notna(slide_row["pt_filename"]):
-                    pt_filename = slide_row["pt_filename"]
-                else:
-                    pt_filename = os.path.splitext(slide_row["svs_filename"])[0] + ".pt"
-                pt_file = os.path.join(self.pt_dir, pt_filename)
-                patch_data.append({"pt_file": pt_file})
-        else:
-            raise ValueError("SurvivalMultimodalDataset requires pt_dir for multimodal training.")
+        split_df = split_df.drop(columns=CLINICAL_COLUMNS, errors="ignore")
 
-        return (
-            SurvivalMultimodalSplitDataset(
-                patch_data,
-                x,
-                y,
-                split_df,
-                feature_dim=self.wsi_feature_dim,
-                pt_dir=self.pt_dir,
-            ),
-            fitted_scaler,
-        )
+        if not self.pt_dir:
+            raise ValueError("SurvivalMultimodalWSIGeneDataset requires pt_dir for multimodal training.")
+        first_slides = self.slide_data.drop_duplicates("patient_id").set_index("patient_id")
+        patch_data = []
+        for patient in split_df[self.label_id_col]:
+            if patient not in first_slides.index:
+                raise FileNotFoundError(f"No WSI slide metadata found for patient: {patient}")
+            slide = first_slides.loc[patient]
+            filename = slide.get("pt_filename")
+            if pd.isna(filename):
+                filename = os.path.splitext(slide["svs_filename"])[0] + ".pt"
+            patch_data.append({"pt_file": os.path.join(self.pt_dir, filename)})
+        return SurvivalMultimodalWSIGeneSplitDataset(
+            patch_data, x, y, split_df, self.wsi_feature_dim, self.pt_dir,
+        ), fitted_scaler
 
     def return_splits(self, args, fold_indices):
+        if str(args.loss_func).lower() in {"nll_surv", "nllsurvloss", "nll_survival", "nll_loss", "lossclass"}:
+            training = self.metadata.loc[~self.metadata.index.isin(fold_indices)]
+            observed = training.loc[training["censorship"] == 0, self.label_col]
+            _, edges = pd.qcut(observed, q=self.n_classes, retbins=True, duplicates="drop")
+            if len(edges) != self.n_classes + 1:
+                raise ValueError("Not enough unique observed training survival times for n_classes.")
+            edges[0], edges[-1] = -np.inf, np.inf
+            self.survival_bin_edges = edges
+            self.labels = pd.cut(self.metadata[self.label_col], bins=edges, labels=False, include_lowest=True).to_numpy(dtype=np.int64)
+            self.metadata["__label"] = self.labels
+            self.metadata[f"{self.label_col}_bin"] = self.labels
         train_split, scalar = self.__return_splits("train", fold_indices, scalar=True)
         test_split, _ = self.__return_splits("test", fold_indices, scalar=False)
 

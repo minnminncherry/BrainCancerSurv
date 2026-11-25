@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+from model.out_survival_head import SurvivalPredictionHead
 import torch.nn.functional as F
 
 
@@ -7,7 +8,8 @@ class ViTMRI(nn.Module):
     """3D patch embeddings, spatial positions, and Transformer survival classification."""
 
     def __init__(self, input_dim=1024, n_classes=4, hidden_dim=128,
-                 dropout=0.3, patch_size=32, num_layers=2, num_heads=4):
+                 dropout=0.3, patch_size=32, num_layers=2, num_heads=4,
+                 n_mutation_targets=0):
         super().__init__()
         if hidden_dim % num_heads:
             raise ValueError("hidden_dim must be divisible by num_heads.")
@@ -40,10 +42,11 @@ class ViTMRI(nn.Module):
             nn.Linear(hidden_dim, hidden_dim // 2), nn.Tanh(),
             nn.Linear(hidden_dim // 2, 1),
         )
-        self.classifier = nn.Sequential(nn.Dropout(dropout), nn.Linear(hidden_dim, self.n_classes))
+        self.classifier = nn.Sequential(nn.Dropout(dropout), SurvivalPredictionHead(hidden_dim, self.n_classes))
+        self.mutation_head = nn.Linear(hidden_dim, n_mutation_targets) if n_mutation_targets else None
 
-    def forward(self, x, return_attention=False):
-        """Return logits; optional attention contains final pooling weights, not self-attention."""
+    def _encode_tokens(self, x):
+        """Encode positioned patches while retaining their spatial sequence."""
         if not torch.is_tensor(x):
             raise TypeError("ViTMRI input must be a torch.Tensor.")
         x = x.float()
@@ -82,8 +85,27 @@ class ViTMRI(nn.Module):
         valid[~valid.any(dim=1), 0] = True
         tokens = self.embedding_dropout(tokens + positions)
         tokens = self.transformer(tokens, src_key_padding_mask=~valid)
+        return tokens, valid
+
+    def forward_tokens(self, x):
+        """Return unpooled ViT features [B, patches, hidden_dim]."""
+        tokens, valid = self._encode_tokens(x)
+        return tokens.masked_fill(~valid.unsqueeze(-1), 0)
+
+    def forward_features(self, x, return_attention=False):
+        """Return an attention-pooled MRI embedding for late fusion."""
+        tokens, valid = self._encode_tokens(x)
         scores = self.attention(tokens).squeeze(-1).masked_fill(~valid, float("-inf"))
         weights = scores.softmax(dim=1)
         features = (tokens * weights.unsqueeze(-1)).sum(dim=1)
+        return (features, weights) if return_attention else features
+
+    def forward(self, x, return_attention=False):
+        """Return logits; optional attention contains final pooling weights, not self-attention."""
+        features, weights = self.forward_features(x, return_attention=True)
         logits = self.classifier(features)
+        if self.mutation_head is not None:
+            logits = {"survival_logits": logits,
+                      "mri_mutation_logits": self.mutation_head(features),
+                      "mri_embedding": features}
         return (logits, weights) if return_attention else logits

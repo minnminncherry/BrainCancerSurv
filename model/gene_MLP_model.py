@@ -11,7 +11,7 @@ class MLPGenomics(nn.Module):
         dropout=0.1,
         num_layers=2,
     ):
-        super(MLPGenomics, self).__init__()
+        super().__init__()
         self.projection_dim = projection_dim
         self.n_classes = n_classes
 
@@ -51,14 +51,10 @@ class MLPGenomics(nn.Module):
 
     def forward(self, x=None, **kwargs):
         data_omics = self._get_omics_tensor(x=x, **kwargs)
-        data = self.net(data_omics)
-        logits = self.to_logits(data)
-        return logits
+        return self.to_logits(self.net(data_omics))
 
     def captum(self, omics):
-        data_omics = self._get_omics_tensor(x=omics)
-        data = self.net(data_omics)
-        logits = self.to_logits(data)
+        logits = self(omics)
 
         hazards = torch.sigmoid(logits)
         survival = torch.cumprod(1 - hazards, dim=1)

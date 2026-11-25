@@ -1,9 +1,6 @@
 import torch
 import torch.nn as nn
-
-
-class Dense(nn.Linear):
-    """Dense/fully connected layer. In PyTorch, this is implemented by nn.Linear."""
+from model.out_survival_head import SurvivalPredictionHead
 
 
 class ResidualMLPBlock(nn.Module):
@@ -40,6 +37,7 @@ class ResMLPGenomics(nn.Module):
         hidden_dim=256,
         num_blocks=5,
         dropout=0.2,
+        n_mutation_targets=0,
     ):
         super().__init__()
         self.input_dim = input_dim
@@ -56,8 +54,9 @@ class ResMLPGenomics(nn.Module):
         )
         self.to_logits = nn.Sequential(
             nn.LayerNorm(hidden_dim),
-            nn.Linear(hidden_dim, n_classes),
+            SurvivalPredictionHead(hidden_dim, n_classes),
         )
+        self.mutation_head = nn.Linear(hidden_dim, n_mutation_targets) if n_mutation_targets else None
 
         self._init_weights()
 
@@ -85,17 +84,24 @@ class ResMLPGenomics(nn.Module):
             raise ValueError(f"Expected {self.input_dim} genomic features, got {data_omics.size(1)}.")
         return data_omics
 
-    def forward(self, x=None, **kwargs):
+    def forward_features(self, x=None, **kwargs):
+        """Return the shared embedding for survival and mutation heads."""
         data_omics = self._get_omics_tensor(x=x, **kwargs)
-        features = self.input_projection(data_omics)
-        features = self.residual_blocks(features)
-        logits = self.to_logits(features)
-        return logits
+        return self.residual_blocks(self.input_projection(data_omics))
+
+    def forward(self, x=None, **kwargs):
+        features = self.forward_features(x=x, **kwargs)
+        if self.mutation_head is not None:
+            return {"survival_logits": self.to_logits(features),
+                    "genomic_mutation_logits": self.mutation_head(features)}
+        return self.to_logits(features)
 
     def captum(self, omics):
         logits = self.forward(omics)
+        if isinstance(logits, dict):
+            logits = logits["survival_logits"]
         hazards = torch.sigmoid(logits)
         survival = torch.cumprod(1 - hazards, dim=1)
         risk = -torch.sum(survival, dim=1)
         return risk
- 
+

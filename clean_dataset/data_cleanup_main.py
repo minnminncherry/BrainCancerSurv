@@ -20,6 +20,8 @@ def main(args1, args2=None, args3=None):
     with open(yaml_file_path, 'r') as file:
         data = yaml.safe_load(file)
 
+    
+
     if (args2 == 'gbm'):
         input_dir = data['gbm_src_file_paths']['genomic_data_dir']
         output_dir = data['gbm_clean_file_paths']['genomic_data_dir']
@@ -53,8 +55,8 @@ def main(args1, args2=None, args3=None):
         mri_input_dir = os.path.abspath(os.path.join(script_dir, data['MRI_file_path']['lgg_mri_input_file_path']))
         mri_metadata_file_path = os.path.abspath(os.path.join(script_dir, data['MRI_file_path']['lgg_mri_metadata_file_path']))
         wsi_pt_dir = os.path.abspath(os.path.join(script_dir, data['WSI_file_path']['lgg_wsi_pt_file_path']))
-        mutat_input_dir = os.path.abspath(os.path.join(script_dir, data['Mutation_file_path']['gbm_input_file_path']))
-        mutat_output_dir = os.path.abspath(os.path.join(script_dir, data['Mutation_file_path']['gbm_output_file_path']))
+        mutat_input_dir = os.path.abspath(os.path.join(script_dir, data['Mutation_file_path']['lgg_input_file_path']))
+        mutat_output_dir = os.path.abspath(os.path.join(script_dir, data['Mutation_file_path']['lgg_output_file_path']))
 
     else:
         print("Invalid cancer type provided. Please specify 'gbm' or 'lgg'.")
@@ -65,7 +67,7 @@ def main(args1, args2=None, args3=None):
     mri_cls = MRIDataCleaner(mri_input_dir)
     mutation_cls = GenomicMutation(mutat_input_dir, mutat_output_dir)
 
-    if args1 != 'TEXT_TO_CSV':
+    if args1 not in {'TEXT_TO_CSV', 'CALCULATE_MRI_TUMOR_VOLUMES'}:
         gen_cls.connect_db(db_name)
         wsi_cls.connect_db(db_name)
         mri_cls.connect_db(db_name)
@@ -197,9 +199,18 @@ def main(args1, args2=None, args3=None):
                 mri_cls.generate_csv_from_db("raw_patient_info_MRI", os.path.join(mri_metadata_file_path, "gbm_mri_metadata.csv"))
             elif args2 == 'lgg':
                 mri_cls.generate_csv_from_db("raw_patient_info_MRI", os.path.join(mri_metadata_file_path, "lgg_mri_metadata.csv"))
+    
+    elif(args1 == 'CALCULATE_MRI_TUMOR_VOLUMES'):
+        mri_cls.calculate_tumor_volumes(
+            mri_metadata_file_path,
+            output_csv=os.path.join(mri_metadata_file_path, f'{args2}_tumor_volumes.csv'),
+            cancer_type=args2,
+            mri_dir=mri_input_dir,
+        )
 
     elif(args1 == 'COLLECT_AND_TRANSFORM_ZIP_MUTATION'):
         if mutation_cls.conn:
+            print(f"mutat_input_dir: {mutat_input_dir}, mutat_output_dir: {mutat_output_dir}")
             mutation_cls.extract_zip_file(mutat_input_dir, "gz")
 
     elif(args1 == 'EXTRACT_MAF_MUTATION_FILE_GENERATE_CSV'):

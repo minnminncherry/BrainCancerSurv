@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+from model.out_survival_head import SurvivalPredictionHead
 import torch.nn.functional as F
 
 
@@ -32,7 +33,7 @@ class MILWSI(nn.Module):
             nn.Linear(hidden_dim // 2, 1),
         )
 
-        self.classifier = nn.Linear(hidden_dim, self.n_classes)
+        self.classifier = SurvivalPredictionHead(hidden_dim, self.n_classes)
 
     def forward(self, x, return_attention=False, return_features=False,
                 return_tokens=False, mask_padding=True):
